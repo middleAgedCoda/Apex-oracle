@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apex Oracle</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0a0e17">
+<style>
+  :root {
+    --bg: #0a0e17; --card: #141b2b; --border: #1a2335;
+    --accent: #00f5d4; --text: #ffffff; --text-secondary: #8a94a6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px;
+    text-align: center;
+  }
+  h1 { font-size: 1.8rem; letter-spacing: 0.02em; margin-bottom: 4px; }
+  .tagline { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 32px; }
+  .status-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; width: 100%; max-width: 360px;
+  }
+  .status-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 0.9rem; }
+  .status-label { color: var(--text-secondary); }
+  .status-value.ok { color: var(--accent); }
+  .status-value.error { color: #ff6b6b; }
+</style>
+</head>
+<body>
+  <h1>APEX ORACLE™</h1>
+  <div class="tagline">Think Clearly Before Every Match.</div>
+  <div class="status-card" id="status-card">
+    <div class="status-row"><span class="status-label">Server</span><span class="status-value" id="s-server">checking…</span></div>
+    <div class="status-row"><span class="status-label">Database</span><span class="status-value" id="s-db">checking…</span></div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+    fetch('/api/health')
+      .then(r => r.json())
+      .then(h => {
+        const s = document.getElementById('s-server');
+        const d = document.getElementById('s-db');
+        s.textContent = h.status;
+        s.className = 'status-value ok';
+        d.textContent = h.database;
+        d.className = 'status-value ' + (h.database === 'connected' ? 'ok' : 'error');
+      })
+      .catch(() => {
+        document.getElementById('s-server').textContent = 'unreachable';
+        document.getElementById('s-server').className = 'status-value error';
+      });
+  </script>
+</body>
+</html>
