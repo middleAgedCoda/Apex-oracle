@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
+const { gatherEvents } = require('./lib/data-mesh');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,6 +29,12 @@ app.get('/api/health', async (req, res) => {
     }
   }
   res.json(health);
+});
+
+app.get('/api/events/mesh', async (req, res) => {
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const result = await gatherEvents(date);
+  res.json(result);
 });
 
 app.get('*', (req, res) => {
