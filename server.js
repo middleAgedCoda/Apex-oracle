@@ -48,6 +48,21 @@ app.get('/api/providers/football-data/competitions', async (req, res) => {
     res.json({ ok: false, reason: err.message });
   }
 });
+
+app.get('/api/providers/football-data/pl-check', async (req, res) => {
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+
+  try {
+    const url = 'https://api.football-data.org/v4/competitions/PL/matches?dateFrom=2026-09-08&dateTo=2026-09-20';
+    const r = await fetch(url, { headers: { 'X-Auth-Token': apiKey } });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, count: data.matches?.length ?? 0, raw: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/events/mesh', async (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
   const result = await gatherEvents(date);
