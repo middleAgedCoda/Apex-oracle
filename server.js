@@ -1,4 +1,6 @@
 require('dotenv').config();
+const { fetchFinishedMatches, leagueAverages, teamStrength } = require('./lib/analysis/team-strength');
+const { computeProbabilities } = require('./lib/analysis/poisson');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
@@ -22,6 +24,48 @@ app.get('/api/health', async (req, res) => {
     }
   }
   res.json(health);
+});
+
+
+app.get('/api/analyze', async (req, res) => {
+  const { competition, home, away } = req.query;
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+
+  if (!competition || !home || !away) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
+  }
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+
+  try {
+    const matches = await fetchFinishedMatches(competition, apiKey);
+    const leagueAvg = leagueAverages(matches);
+    if (!leagueAvg) return res.json({ ok: false, reason: 'no_finished_matches_yet', competition });
+
+    const homeStrength = teamStrength(matches, home, leagueAvg);
+    const awayStrength = teamStrength(matches, away, leagueAvg);
+
+    if (!homeStrength.sufficient || !awayStrength.sufficient) {
+      return res.json({
+        ok: false, reason: 'insufficient_sample',
+        detail: { home: homeStrength, away: awayStrength },
+        note: 'Need at least 3 home and 3 away matches each with recorded scores. Early season — try again once more matchdays are played.',
+      });
+    }
+
+    const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
+    const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
+    const probabilities = computeProbabilities(lambdaHome, lambdaAway);
+
+    res.json({
+      ok: true, competition, fixture: { home, away },
+      leagueAverages: leagueAvg,
+      lambdas: { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 },
+      probabilities,
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
