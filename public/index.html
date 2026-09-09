@@ -5,58 +5,460 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Apex Oracle</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0a0e17">
+<meta name="theme-color" content="#05060a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0a0e17; --card: #141b2b; --border: #1a2335;
-    --accent: #00f5d4; --text: #ffffff; --text-secondary: #8a94a6;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font-family: 'Inter', -apple-system, sans-serif;
-    min-height: 100vh; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; padding: 24px;
-    text-align: center;
-  }
-  h1 { font-size: 1.8rem; letter-spacing: 0.02em; margin-bottom: 4px; }
-  .tagline { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 32px; }
-  .status-card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 20px; width: 100%; max-width: 360px;
-  }
-  .status-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 0.9rem; }
-  .status-label { color: var(--text-secondary); }
-  .status-value.ok { color: var(--accent); }
-  .status-value.error { color: #ff6b6b; }
+:root {
+  --bg: #05060a; --panel: #0d0f18; --panel-2: #12141f;
+  --border: rgba(255,255,255,0.07);
+  --gold: #f2a93b; --gold-glow: rgba(242,169,59,0.35);
+  --violet: #9d5cff; --violet-glow: rgba(157,92,255,0.35);
+  --teal: #00f5d4; --red: #ff6b6b;
+  --text: #f5f3ee; --dim: #8b8fa3;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; overscroll-behavior: none; }
+body { min-height: 100vh; padding-bottom: env(safe-area-inset-bottom); }
+h1, h2, h3, .rj, .num { font-family: 'Rajdhani', sans-serif; font-weight: 600; letter-spacing: 0.01em; }
+canvas#bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+#cursor-dot, #cursor-ring { position: fixed; pointer-events: none; z-index: 9999; border-radius: 50%; transition: opacity .2s; }
+#cursor-dot { width: 5px; height: 5px; background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+#cursor-ring { width: 26px; height: 26px; border: 1px solid var(--violet); opacity: .6; transition: transform .12s ease-out, opacity .2s; }
+@media (pointer: coarse) { #cursor-dot, #cursor-ring { display: none; } }
+
+#gate { position: fixed; inset: 0; z-index: 200; background: var(--bg); display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px; padding: 24px; text-align: center; }
+#gate.hidden { display: none; }
+#gate h1 { font-size: 1.6rem; }
+#gate .sub { color: var(--dim); font-size: .85rem; }
+#gate input { background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 14px 16px; border-radius: 6px; width: 100%; max-width: 320px; font-family: 'Inter'; font-size: 1rem; }
+#gate input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
+#gate button { background: linear-gradient(135deg, var(--gold), var(--violet)); color: #05060a; border: none; padding: 13px 28px; border-radius: 6px; font-family: 'Rajdhani'; font-weight: 700; font-size: 1rem; letter-spacing: .03em; cursor: pointer; }
+#gate .err { color: var(--red); font-size: .8rem; min-height: 1em; }
+
+#app { position: relative; z-index: 1; display: none; min-height: 100vh; flex-direction: column; }
+#app.active { display: flex; }
+
+header.hud { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: rgba(5,6,10,0.85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+header.hud .brand { font-size: 1.1rem; letter-spacing: .04em; }
+header.hud .status { display: flex; align-items: center; gap: 6px; font-size: .7rem; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 6px var(--teal); animation: pulse 2s infinite; }
+.dot.off { background: var(--red); box-shadow: 0 0 6px var(--red); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+main { flex: 1; padding: 16px 16px 90px; max-width: 640px; width: 100%; margin: 0 auto; }
+.view { display: none; }
+.view.active { display: block; animation: fadeUp .3s ease; }
+@keyframes fadeUp { from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:translateY(0)} }
+
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden; }
+.panel::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background: linear-gradient(90deg, transparent, var(--gold-glow), var(--violet-glow), transparent); }
+
+.row { display: flex; gap: 8px; }
+.field { flex: 1; }
+label.rj { display: block; font-size: .72rem; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
+select, input[type=date] { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'Inter'; }
+.btn { background: linear-gradient(135deg, var(--gold), var(--violet)); color: #05060a; border: none; padding: 12px 18px; border-radius: 6px; font-family: 'Rajdhani'; font-weight: 700; letter-spacing: .03em; cursor: pointer; width: 100%; margin-top: 10px; transition: transform .12s, box-shadow .12s; }
+.btn:active { transform: scale(.97); }
+.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+.fixture { display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; cursor: pointer; transition: border-color .15s, background .15s; }
+.fixture:active { background: var(--panel-2); border-color: var(--violet); }
+.fixture .teams { font-size: .95rem; }
+.fixture .comp { font-size: .68rem; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.fixture .time { font-family: 'Rajdhani'; color: var(--gold); font-size: .85rem; }
+
+.bar-row { margin-bottom: 10px; }
+.bar-label { display: flex; justify-content: space-between; font-size: .8rem; margin-bottom: 4px; }
+.bar-track { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--violet), var(--gold)); transition: width .6s ease; }
+
+#briefing-overlay { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: none; flex-direction: column; }
+#briefing-overlay.active { display: flex; }
+.overlay-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.overlay-head button { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 6px 10px; font-family: 'Rajdhani'; }
+.overlay-body { flex: 1; overflow-y: auto; padding: 16px; }
+.scan-lines { display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; height: 60vh; color: var(--dim); font-family: 'Rajdhani'; letter-spacing: .04em; }
+.scan-dot { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--gold); border-top-color: var(--violet); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.section-label { font-size: .72rem; color: var(--dim); text-transform: uppercase; letter-spacing: .07em; margin: 16px 0 6px; }
+.section-label:first-child { margin-top: 0; }
+p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
+
+.gauge { text-align: center; padding: 20px 0; }
+.gauge .num { font-size: 2.6rem; background: linear-gradient(135deg, var(--gold), var(--violet)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.gauge .lbl { color: var(--dim); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
+.pill { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--border); color: var(--dim); }
+
+.tabbar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; display: flex; background: rgba(13,15,24,0.92); backdrop-filter: blur(12px); border-top: 1px solid var(--border); padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); }
+.tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; color: var(--dim); font-family: 'Rajdhani'; font-size: .72rem; padding: 6px 0; letter-spacing: .03em; position: relative; }
+.tab.active { color: var(--gold); }
+.tab .tick { width: 20px; height: 2px; border-radius: 2px; background: transparent; margin-bottom: 2px; }
+.tab.active .tick { background: linear-gradient(90deg, var(--gold), var(--violet)); box-shadow: 0 0 6px var(--gold-glow); }
+
+.empty { text-align: center; padding: 40px 12px; color: var(--dim); font-size: .85rem; }
+.mono-small { font-size: .7rem; color: var(--dim); font-family: 'Inter'; }
 </style>
 </head>
 <body>
-  <h1>APEX ORACLE™</h1>
-  <div class="tagline">Think Clearly Before Every Match.</div>
-  <div class="status-card" id="status-card">
-    <div class="status-row"><span class="status-label">Server</span><span class="status-value" id="s-server">checking…</span></div>
-    <div class="status-row"><span class="status-label">Database</span><span class="status-value" id="s-db">checking…</span></div>
-  </div>
 
-  <script>
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
-    fetch('/api/health')
-      .then(r => r.json())
-      .then(h => {
-        const s = document.getElementById('s-server');
-        const d = document.getElementById('s-db');
-        s.textContent = h.status;
-        s.className = 'status-value ok';
-        d.textContent = h.database;
-        d.className = 'status-value ' + (h.database === 'connected' ? 'ok' : 'error');
-      })
-      .catch(() => {
-        document.getElementById('s-server').textContent = 'unreachable';
-        document.getElementById('s-server').className = 'status-value error';
+<canvas id="bg"></canvas>
+<div id="cursor-dot"></div>
+<div id="cursor-ring"></div>
+
+<div id="gate">
+  <h1 class="rj">APEX ORACLE™</h1>
+  <div class="sub">Enter access key to continue</div>
+  <input id="key-input" type="password" placeholder="Access key" autocomplete="off">
+  <button id="gate-btn" class="rj">CONNECT</button>
+  <div class="err" id="gate-err"></div>
+</div>
+
+<div id="app">
+  <header class="hud">
+    <div class="brand rj">APEX ORACLE</div>
+    <div class="status"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting</span></div>
+  </header>
+
+  <main>
+    <section class="view active" id="view-fixtures">
+      <div class="panel">
+        <div class="row">
+          <div class="field">
+            <label class="rj">Competition</label>
+            <select id="comp-select">
+              <option value="PL">Premier League</option>
+              <option value="PD">La Liga</option>
+              <option value="BL1">Bundesliga</option>
+              <option value="SA">Serie A</option>
+              <option value="FL1">Ligue 1</option>
+              <option value="BSA">Brasileirão</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="rj">Date</label>
+            <input type="date" id="date-select">
+          </div>
+        </div>
+        <button class="btn rj" id="scan-btn">Scan Fixtures</button>
+      </div>
+      <div id="fixtures-list"></div>
+    </section>
+
+    <section class="view" id="view-journal">
+      <div id="journal-list"><div class="empty">Loading journal…</div></div>
+    </section>
+
+    <section class="view" id="view-ledger">
+      <div id="ledger-content"><div class="empty">Loading ledger…</div></div>
+    </section>
+
+    <section class="view" id="view-tickets">
+      <div class="panel">
+        <div class="section-label">Build a ticket</div>
+        <div id="ticket-builder-list" class="mono-small">Save a few analyses in the Journal first, then tap them here.</div>
+        <button class="btn rj" id="build-ticket-btn" style="display:none">Build Ticket</button>
+      </div>
+      <div id="tickets-list"></div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tab active" data-view="fixtures"><div class="tick"></div>Fixtures</button>
+    <button class="tab" data-view="journal"><div class="tick"></div>Journal</button>
+    <button class="tab" data-view="ledger"><div class="tick"></div>Ledger</button>
+    <button class="tab" data-view="tickets"><div class="tick"></div>Tickets</button>
+  </nav>
+</div>
+
+<div id="briefing-overlay">
+  <div class="overlay-head">
+    <button id="close-briefing" class="rj">← Back</button>
+    <div class="rj" id="briefing-title">Briefing</div>
+  </div>
+  <div class="overlay-body" id="briefing-body"></div>
+</div>
+
+<script>
+// ---------- particle background ----------
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+let particles = [];
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+resize(); addEventListener('resize', resize);
+for (let i = 0; i < 45; i++) {
+  particles.push({
+    x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+    r: Math.random() * 1.4 + 0.4, vy: -(Math.random() * 0.25 + 0.05),
+    hue: Math.random() > 0.5 ? '242,169,59' : '157,92,255',
+    o: Math.random() * 0.5 + 0.15,
+  });
+}
+function tick() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const p of particles) {
+    p.y += p.vy;
+    if (p.y < -10) { p.y = innerHeight + 10; p.x = Math.random() * innerWidth; }
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${p.hue},${p.o})`;
+    ctx.fill();
+  }
+  requestAnimationFrame(tick);
+}
+tick();
+
+// ---------- custom cursor (pointer devices only) ----------
+if (matchMedia('(pointer: fine)').matches) {
+  const dot = document.getElementById('cursor-dot');
+  const ring = document.getElementById('cursor-ring');
+  addEventListener('mousemove', (e) => {
+    dot.style.left = e.clientX - 2.5 + 'px'; dot.style.top = e.clientY - 2.5 + 'px';
+    ring.style.left = e.clientX - 13 + 'px'; ring.style.top = e.clientY - 13 + 'px';
+  });
+}
+
+// ---------- auth gate ----------
+const KEY_STORAGE = 'apex-oracle-key';
+let API_KEY = localStorage.getItem(KEY_STORAGE);
+const gate = document.getElementById('gate');
+const app = document.getElementById('app');
+
+function enterApp() {
+  gate.classList.add('hidden');
+  app.classList.add('active');
+  checkHealth();
+  loadFixturesDefault();
+}
+
+document.getElementById('gate-btn').addEventListener('click', async () => {
+  const val = document.getElementById('key-input').value.trim();
+  if (!val) return;
+  const res = await fetch(`/api/health?key=${encodeURIComponent(val)}`);
+  if (res.status === 401) {
+    document.getElementById('gate-err').textContent = 'Invalid key';
+    return;
+  }
+  API_KEY = val;
+  localStorage.setItem(KEY_STORAGE, val);
+  enterApp();
+});
+
+if (API_KEY) enterApp();
+
+// ---------- api helper ----------
+async function api(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await fetch(`${path}${sep}key=${encodeURIComponent(API_KEY)}`);
+  return res.json();
+}
+
+async function checkHealth() {
+  try {
+    const h = await api('/api/health');
+    document.getElementById('conn-dot').classList.toggle('off', h.database !== 'connected');
+    document.getElementById('conn-text').textContent = h.database === 'connected' ? 'online' : 'degraded';
+  } catch {
+    document.getElementById('conn-dot').classList.add('off');
+    document.getElementById('conn-text').textContent = 'offline';
+  }
+}
+
+// ---------- tab navigation ----------
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('view-' + tab.dataset.view).classList.add('active');
+    if (tab.dataset.view === 'journal') loadJournal();
+    if (tab.dataset.view === 'ledger') loadLedger();
+    if (tab.dataset.view === 'tickets') loadTickets();
+  });
+});
+
+// ---------- fixtures ----------
+function loadFixturesDefault() {
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('date-select').value = today;
+}
+
+document.getElementById('scan-btn').addEventListener('click', async () => {
+  const comp = document.getElementById('comp-select').value;
+  const date = document.getElementById('date-select').value;
+  const list = document.getElementById('fixtures-list');
+  list.innerHTML = '<div class="empty">Scanning…</div>';
+  const data = await api(`/api/events/mesh?date=${date}`);
+  const filtered = (data.events || []).filter((e) => e.competition.name && matchesComp(e, comp));
+  if (!filtered.length) { list.innerHTML = '<div class="empty">No fixtures found for this date/competition.</div>'; return; }
+  list.innerHTML = '';
+  filtered.forEach((ev) => {
+    const el = document.createElement('div');
+    el.className = 'fixture';
+    const time = new Date(ev.kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    el.innerHTML = `<div><div class="comp rj">${ev.competition.name}</div><div class="teams">${ev.participants.home.name} vs ${ev.participants.away.name}</div></div><div class="time">${time}</div>`;
+    el.addEventListener('click', () => openBriefing(comp, ev.participants.home.name, ev.participants.away.name));
+    list.appendChild(el);
+  });
+});
+
+const COMP_NAMES = { PL: 'Premier League', PD: 'Primera Division', BL1: 'Bundesliga', SA: 'Serie A', FL1: 'Ligue 1', BSA: 'Campeonato Brasileiro Série A' };
+function matchesComp(ev, code) { return ev.competition.name === COMP_NAMES[code]; }
+
+// ---------- briefing overlay ----------
+const overlay = document.getElementById('briefing-overlay');
+document.getElementById('close-briefing').addEventListener('click', () => overlay.classList.remove('active'));
+
+async function openBriefing(comp, home, away) {
+  overlay.classList.add('active');
+  document.getElementById('briefing-title').textContent = `${home} vs ${away}`;
+  const body = document.getElementById('briefing-body');
+  const steps = ['Gathering evidence…', 'Running statistical simulation…', 'Preparing Oracle Briefing…'];
+  body.innerHTML = `<div class="scan-lines"><div class="scan-dot"></div><div id="scan-text" class="rj">${steps[0]}</div></div>`;
+  let i = 0;
+  const stepTimer = setInterval(() => { i = (i + 1) % steps.length; const el = document.getElementById('scan-text'); if (el) el.textContent = steps[i]; }, 900);
+
+  const data = await api(`/api/analyze-and-save?competition=${comp}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`);
+  clearInterval(stepTimer);
+
+  if (!data.ok) {
+    body.innerHTML = `<div class="empty">${data.reason || 'Unable to analyze this fixture.'}<br><span class="mono-small">${data.reason === 'insufficient_sample' ? 'Not enough finished matches yet for a reliable read.' : ''}</span></div>`;
+    return;
+  }
+  renderBriefing(body, data.analysis);
+}
+
+function renderBriefing(body, a) {
+  const p = a.probabilities;
+  const b = a.briefing;
+  body.innerHTML = `
+    <div class="panel">
+      <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
+      <div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>
+      <div class="bar-row"><div class="bar-label"><span>${a.away_team}</span><span class="num">${p.away}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.away}%"></div></div></div>
+      <div class="row" style="margin-top:8px">
+        <div class="field mono-small">Over 2.5: ${p.over25}%</div>
+        <div class="field mono-small">BTTS: ${p.btts}%</div>
+      </div>
+    </div>
+    <div class="section-label">Model Lean</div><p class="body-text">${b.modelLean}</p>
+    <div class="section-label">Situation</div><p class="body-text">${b.situation}</p>
+    <div class="section-label">Primary Signal</div><p class="body-text">${b.primarySignal}</p>
+    <div class="section-label">Biggest Risk</div><p class="body-text">${b.biggestRisk}</p>
+    <div class="section-label">Conclusion</div><p class="body-text">${b.conclusion}</p>
+    <div class="section-label">Counterfactual — What Could Go Wrong</div>
+    <p class="body-text">${(b.counterfactual.conditions || []).join(' · ') || b.counterfactual.whatToWatch}</p>
+    <div class="section-label">One Question To Ask Yourself</div><p class="body-text" style="color:var(--gold)">${b.decisionQuestion}</p>
+    <div class="mono-small" style="margin-top:16px">${a.analysis_id} · saved to Journal · source: ${a.briefing_source}</div>
+  `;
+}
+
+// ---------- journal ----------
+async function loadJournal() {
+  const list = document.getElementById('journal-list');
+  const data = await api('/api/analyses');
+  if (!data.analyses.length) { list.innerHTML = '<div class="empty">No saved analyses yet — run a briefing from Fixtures.</div>'; return; }
+  list.innerHTML = '';
+  data.analyses.forEach((a) => {
+    const p = a.probabilities;
+    const el = document.createElement('div');
+    el.className = 'panel';
+    el.style.cursor = 'pointer';
+    el.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center">
+      <div><div class="rj">${a.home_team} vs ${a.away_team}</div><div class="mono-small">${a.competition} · ${a.analysis_id}</div></div>
+      <span class="pill">${a.status}</span>
+    </div>
+    <div class="mono-small" style="margin-top:8px">Home ${p.home}% · Draw ${p.draw}% · Away ${p.away}%</div>`;
+    if (a.status === 'pending') {
+      const btn = document.createElement('button');
+      btn.className = 'btn ghost rj'; btn.textContent = 'Run Replay'; btn.style.marginTop = '10px';
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        btn.textContent = 'Checking…';
+        const r = await api(`/api/analyses/${a.analysis_id}/replay`);
+        loadJournal();
       });
-  </script>
+      el.appendChild(btn);
+    } else {
+      const outcome = document.createElement('div');
+      outcome.className = 'mono-small';
+      outcome.style.marginTop = '8px';
+      outcome.style.color = a.outcome_correct ? 'var(--teal)' : 'var(--red)';
+      outcome.textContent = `Final: ${a.actual_score.home}-${a.actual_score.away} · Lean was ${a.outcome_correct ? 'correct' : 'wrong'} · Brier ${Number(a.brier_score).toFixed(3)}`;
+      el.appendChild(outcome);
+    }
+    list.appendChild(el);
+  });
+}
+
+// ---------- ledger ----------
+async function loadLedger() {
+  const el = document.getElementById('ledger-content');
+  const s = await api('/api/ledger');
+  if (!s || s.totalCompleted === 0) { el.innerHTML = '<div class="empty">No completed analyses yet — run Replay on a finished fixture in the Journal.</div>'; return; }
+  const compRows = Object.entries(s.byCompetition).map(([k, v]) =>
+    `<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span>${k}</span><span class="mono-small">${v.correct}/${v.total}</span></div>`
+  ).join('');
+  el.innerHTML = `
+    <div class="panel gauge">
+      <div class="num">${s.accuracy}%</div><div class="lbl">Model Lean Accuracy</div>
+    </div>
+    <div class="row">
+      <div class="panel field" style="text-align:center"><div class="num rj" style="font-size:1.6rem">${s.averageBrierScore}</div><div class="lbl">Avg Brier Score</div></div>
+      <div class="panel field" style="text-align:center"><div class="num rj" style="font-size:1.6rem">${s.totalCompleted}</div><div class="lbl">Completed</div></div>
+    </div>
+    <div class="panel"><span class="pill">${s.sampleBand} sample</span></div>
+    <div class="panel">${compRows}</div>
+  `;
+}
+
+// ---------- tickets ----------
+let selectedLegs = [];
+async function loadTickets() {
+  const journal = await api('/api/analyses?status=pending');
+  const builderList = document.getElementById('ticket-builder-list');
+  if (!journal.analyses.length) { builderList.innerHTML = 'No pending analyses to build with yet.'; }
+  else {
+    builderList.innerHTML = '';
+    journal.analyses.forEach((a) => {
+      const row = document.createElement('div');
+      row.style.padding = '8px 0'; row.style.borderBottom = '1px solid var(--border)';
+      row.innerHTML = `<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-id="${a.analysis_id}"> ${a.home_team} vs ${a.away_team}
+        <select data-market-for="${a.analysis_id}" style="width:auto;margin-left:auto">
+          <option value="home">Home</option><option value="draw">Draw</option><option value="away">Away</option>
+          <option value="over25">Over 2.5</option><option value="under25">Under 2.5</option><option value="btts">BTTS</option><option value="bttsno">BTTS No</option>
+        </select></label>`;
+      builderList.appendChild(row);
+    });
+    document.getElementById('build-ticket-btn').style.display = 'block';
+  }
+
+  const ticketsList = document.getElementById('tickets-list');
+  const t = await api('/api/tickets');
+  ticketsList.innerHTML = t.tickets.length ? '' : '<div class="empty">No tickets built yet.</div>';
+  t.tickets.forEach((tk) => {
+    const el = document.createElement('div');
+    el.className = 'panel';
+    el.innerHTML = `<div class="rj" style="color:var(--gold)">${tk.combined_probability}% combined</div>
+      ${tk.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}`;
+    ticketsList.appendChild(el);
+  });
+}
+
+document.getElementById('build-ticket-btn').addEventListener('click', async () => {
+  const checked = Array.from(document.querySelectorAll('#ticket-builder-list input[type=checkbox]:checked'));
+  if (!checked.length) return;
+  const legs = checked.map((c) => {
+    const id = c.dataset.id;
+    const market = document.querySelector(`[data-market-for="${id}"]`).value;
+    return `${id}:${market}`;
+  }).join(',');
+  await api(`/api/ticket/build?legs=${encodeURIComponent(legs)}`);
+  loadTickets();
+});
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+</script>
 </body>
 </html>
