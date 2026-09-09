@@ -225,7 +225,8 @@ app.get('/api/providers/football-data/teams', async (req, res) => {
 
 app.get('/api/events/mesh', async (req, res) => {
   const date = req.query.date || new Date().toISOString().slice(0, 10);
-  const result = await gatherEvents(date);
+  const competition = req.query.competition;
+  const result = await gatherEvents(date, competition ? [competition] : undefined);
   const persisted = await saveEvents(result.events);
   res.json({ ...result, persisted });
 });
