@@ -4,6 +4,7 @@ const { computeProbabilities } = require('./lib/analysis/poisson');
 const { generateBriefing } = require('./lib/analysis/briefing');
 const { findResult, brierScore, leanCorrect } = require('./lib/analysis/replay');
 const { buildTicket } = require('./lib/analysis/ticket');
+const { MODEL_VERSION, PROMPT_VERSION } = require('./lib/analysis/versions');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
@@ -32,6 +33,15 @@ app.get('/api/health', async (req, res) => {
   }
   res.json(health);
 });
+
+function requireAuth(req, res, next) {
+  const appSecret = process.env.APP_SECRET;
+  if (!appSecret) return res.status(500).json({ ok: false, reason: 'app_secret_not_configured' });
+  const provided = req.query.key || req.headers['x-oracle-key'];
+  if (provided !== appSecret) return res.status(401).json({ ok: false, reason: 'unauthorized' });
+  next();
+}
+app.use('/api', requireAuth);
 
 async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
@@ -103,6 +113,8 @@ app.get('/api/analyze-and-save', async (req, res) => {
     competition, home, away, lambdas, probabilities,
     briefing: briefingResult.briefing,
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    modelVersion: MODEL_VERSION,
+    promptVersion: PROMPT_VERSION,
   });
 
   res.json({ ok: true, analysis: saved });
