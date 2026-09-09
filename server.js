@@ -113,6 +113,7 @@ app.get('/api/analyze-and-save', async (req, res) => {
     competition, home, away, lambdas, probabilities,
     briefing: briefingResult.briefing,
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: MODEL_VERSION,
     promptVersion: PROMPT_VERSION,
   });
