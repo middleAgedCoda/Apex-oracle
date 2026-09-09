@@ -26,7 +26,6 @@ app.get('/api/health', async (req, res) => {
   res.json(health);
 });
 
-
 app.get('/api/analyze', async (req, res) => {
   const { competition, home, away } = req.query;
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
@@ -78,6 +77,23 @@ app.get('/api/providers/football-data/competitions', async (req, res) => {
     const data = await r.json();
     const summary = (data.competitions || []).map(c => ({ code: c.code, name: c.name, plan: c.plan }));
     res.json({ ok: r.ok, status: r.status, competitions: summary });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/providers/football-data/teams', async (req, res) => {
+  const { competition } = req.query;
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  if (!competition) return res.json({ ok: false, reason: 'missing_competition_param' });
+
+  try {
+    const url = `https://api.football-data.org/v4/competitions/${competition}/teams`;
+    const r = await fetch(url, { headers: { 'X-Auth-Token': apiKey } });
+    const data = await r.json();
+    const names = (data.teams || []).map(t => t.name);
+    res.json({ ok: r.ok, competition, teams: names });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
