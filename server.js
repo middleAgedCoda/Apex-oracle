@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { fetchFinishedMatches, leagueAverages, teamStrength } = require('./lib/analysis/team-strength');
 const { computeProbabilities } = require('./lib/analysis/poisson');
+const { generateBriefing } = require('./lib/analysis/briefing');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
@@ -61,6 +62,53 @@ app.get('/api/analyze', async (req, res) => {
       lambdas: { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 },
       probabilities,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/briefing', async (req, res) => {
+  const { competition, home, away } = req.query;
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+
+  if (!competition || !home || !away) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
+  }
+  if (!apiKey) return res.json({ ok: false, reason: 'no_football_data_key' });
+
+  try {
+    const matches = await fetchFinishedMatches(competition, apiKey);
+    const leagueAvg = leagueAverages(matches);
+    if (!leagueAvg) return res.json({ ok: false, reason: 'no_finished_matches_yet', competition });
+
+    const homeStrength = teamStrength(matches, home, leagueAvg);
+    const awayStrength = teamStrength(matches, away, leagueAvg);
+
+    if (!homeStrength.sufficient || !awayStrength.sufficient) {
+      return res.json({ ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } });
+    }
+
+    const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
+    const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
+    const probabilities = computeProbabilities(lambdaHome, lambdaAway);
+
+    const evidence = {
+      competition, fixture: { home, away },
+      leagueAverages: leagueAvg,
+      lambdas: { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 },
+      probabilities,
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    };
+
+    const result = await generateBriefing(evidence);
+
+    res.json({
+      ok: true,
+      evidence,
+      briefingSource: result.ok ? 'ai' : 'fallback',
+      briefingIssue: result.ok ? undefined : result.reason,
+      briefing: result.briefing,
     });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
