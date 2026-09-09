@@ -293,7 +293,7 @@ document.getElementById('scan-btn').addEventListener('click', async () => {
   const date = document.getElementById('date-select').value;
   const list = document.getElementById('fixtures-list');
   list.innerHTML = '<div class="empty">Scanning…</div>';
-  const data = await api(`/api/events/mesh?date=${date}`);
+  const data = await api(`/api/events/mesh?date=${date}&competition=${comp}`);
   const filtered = (data.events || []).filter((e) => e.competition.name && matchesComp(e, comp));
   if (!filtered.length) { list.innerHTML = '<div class="empty">No fixtures found for this date/competition.</div>'; return; }
   list.innerHTML = '';
