@@ -2,10 +2,16 @@ require('dotenv').config();
 const { fetchFinishedMatches, leagueAverages, teamStrength } = require('./lib/analysis/team-strength');
 const { computeProbabilities } = require('./lib/analysis/poisson');
 const { generateBriefing } = require('./lib/analysis/briefing');
+const { findResult, brierScore, leanCorrect } = require('./lib/analysis/replay');
+const { buildTicket } = require('./lib/analysis/ticket');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
-const { pool, migrate, saveEvents, listEvents } = require('./lib/db');
+const {
+  pool, migrate, saveEvents, listEvents,
+  saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome,
+  saveTicket, listTickets, ledgerStats,
+} = require('./lib/db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,101 +33,159 @@ app.get('/api/health', async (req, res) => {
   res.json(health);
 });
 
+async function runAnalysis(competition, home, away) {
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_football_data_key' };
+
+  const matches = await fetchFinishedMatches(competition, apiKey);
+  const leagueAvg = leagueAverages(matches);
+  if (!leagueAvg) return { ok: false, reason: 'no_finished_matches_yet', competition };
+
+  const homeStrength = teamStrength(matches, home, leagueAvg);
+  const awayStrength = teamStrength(matches, away, leagueAvg);
+  if (!homeStrength.sufficient || !awayStrength.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
+  }
+
+  const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
+  const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
+  const probabilities = computeProbabilities(lambdaHome, lambdaAway);
+  const lambdas = { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 };
+
+  return {
+    ok: true,
+    evidence: {
+      competition, fixture: { home, away }, leagueAverages: leagueAvg, lambdas, probabilities,
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    },
+  };
+}
+
 app.get('/api/analyze', async (req, res) => {
   const { competition, home, away } = req.query;
-  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
-
   if (!competition || !home || !away) {
     return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
   }
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const result = await runAnalysis(competition, home, away);
+  if (!result.ok) return res.json(result);
+  res.json({ ok: true, ...result.evidence });
+});
+
+app.get('/api/briefing', async (req, res) => {
+  const { competition, home, away } = req.query;
+  if (!competition || !home || !away) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
+  }
+  const result = await runAnalysis(competition, home, away);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  res.json({
+    ok: true, evidence: result.evidence,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? undefined : briefingResult.reason,
+    briefing: briefingResult.briefing,
+  });
+});
+
+app.get('/api/analyze-and-save', async (req, res) => {
+  const { competition, home, away } = req.query;
+  if (!competition || !home || !away) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
+  }
+  const result = await runAnalysis(competition, home, away);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const { lambdas, probabilities } = result.evidence;
+
+  const saved = await saveAnalysis({
+    competition, home, away, lambdas, probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
+
+app.get('/api/analyses', async (req, res) => {
+  const { status } = req.query;
+  const analyses = await listAnalyses({ status });
+  res.json({ count: analyses.length, analyses });
+});
+
+app.get('/api/analyses/:analysisId', async (req, res) => {
+  const analysis = await getAnalysis(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
+  res.json({ ok: true, analysis });
+});
+
+app.get('/api/analyses/:analysisId/replay', async (req, res) => {
+  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+  const analysis = await getAnalysis(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
+  if (!apiKey) return res.json({ ok: false, reason: 'no_football_data_key' });
 
   try {
-    const matches = await fetchFinishedMatches(competition, apiKey);
-    const leagueAvg = leagueAverages(matches);
-    if (!leagueAvg) return res.json({ ok: false, reason: 'no_finished_matches_yet', competition });
+    const result = await findResult(analysis.competition, analysis.home_team, analysis.away_team, apiKey);
+    if (!result) return res.json({ ok: false, reason: 'match_not_finished_yet' });
 
-    const homeStrength = teamStrength(matches, home, leagueAvg);
-    const awayStrength = teamStrength(matches, away, leagueAvg);
+    const probabilities = analysis.probabilities;
+    const correct = leanCorrect(probabilities, result.actualOutcome);
+    const brier = brierScore(probabilities, result.actualOutcome);
 
-    if (!homeStrength.sufficient || !awayStrength.sufficient) {
-      return res.json({
-        ok: false, reason: 'insufficient_sample',
-        detail: { home: homeStrength, away: awayStrength },
-        note: 'Need at least 3 home and 3 away matches each with recorded scores. Early season — try again once more matchdays are played.',
-      });
-    }
-
-    const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
-    const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
-    const probabilities = computeProbabilities(lambdaHome, lambdaAway);
-
-    res.json({
-      ok: true, competition, fixture: { home, away },
-      leagueAverages: leagueAvg,
-      lambdas: { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 },
-      probabilities,
-      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    const updated = await updateAnalysisOutcome(analysis.analysis_id, {
+      actualScore: { home: result.homeGoals, away: result.awayGoals },
+      outcomeCorrect: correct,
+      brierScore: brier,
     });
+
+    res.json({ ok: true, analysis: updated, replay: { actualOutcome: result.actualOutcome, leanWasCorrect: correct, brierScore: brier } });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
 });
 
-app.get('/api/briefing', async (req, res) => {
-  const { competition, home, away } = req.query;
-  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+app.get('/api/ledger', async (req, res) => {
+  const stats = await ledgerStats();
+  res.json(stats);
+});
 
-  if (!competition || !home || !away) {
-    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
-  }
-  if (!apiKey) return res.json({ ok: false, reason: 'no_football_data_key' });
+app.get('/api/ticket/build', async (req, res) => {
+  const { legs } = req.query;
+  if (!legs) return res.status(400).json({ ok: false, reason: 'missing_legs', format: 'analysisId:market,analysisId:market' });
 
   try {
-    const matches = await fetchFinishedMatches(competition, apiKey);
-    const leagueAvg = leagueAverages(matches);
-    if (!leagueAvg) return res.json({ ok: false, reason: 'no_finished_matches_yet', competition });
-
-    const homeStrength = teamStrength(matches, home, leagueAvg);
-    const awayStrength = teamStrength(matches, away, leagueAvg);
-
-    if (!homeStrength.sufficient || !awayStrength.sufficient) {
-      return res.json({ ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } });
+    const pairs = legs.split(',').map((s) => s.trim().split(':'));
+    const analyses = [];
+    const markets = [];
+    for (const [analysisId, market] of pairs) {
+      const analysis = await getAnalysis(analysisId);
+      if (!analysis) return res.json({ ok: false, reason: `analysis_not_found:${analysisId}` });
+      analyses.push(analysis);
+      markets.push(market);
     }
 
-    const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
-    const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
-    const probabilities = computeProbabilities(lambdaHome, lambdaAway);
+    const result = buildTicket(analyses, markets);
+    if (!result.ok) return res.json(result);
 
-    const evidence = {
-      competition, fixture: { home, away },
-      leagueAverages: leagueAvg,
-      lambdas: { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 },
-      probabilities,
-      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
-    };
-
-    const result = await generateBriefing(evidence);
-
-    res.json({
-      ok: true,
-      evidence,
-      briefingSource: result.ok ? 'ai' : 'fallback',
-      briefingIssue: result.ok ? undefined : result.reason,
-      briefing: result.briefing,
-    });
+    const saved = await saveTicket({ legs: result.legs, combinedProbability: result.combinedProbability });
+    res.json({ ok: true, ticket: saved, note: result.note });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
+});
+
+app.get('/api/tickets', async (req, res) => {
+  const tickets = await listTickets();
+  res.json({ count: tickets.length, tickets });
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
   try {
-    const r = await fetch('https://api.football-data.org/v4/competitions', {
-      headers: { 'X-Auth-Token': apiKey }
-    });
+    const r = await fetch('https://api.football-data.org/v4/competitions', { headers: { 'X-Auth-Token': apiKey } });
     const data = await r.json();
     const summary = (data.competitions || []).map(c => ({ code: c.code, name: c.name, plan: c.plan }));
     res.json({ ok: r.ok, status: r.status, competitions: summary });
@@ -135,26 +199,12 @@ app.get('/api/providers/football-data/teams', async (req, res) => {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
   if (!competition) return res.json({ ok: false, reason: 'missing_competition_param' });
-
   try {
     const url = `https://api.football-data.org/v4/competitions/${competition}/teams`;
     const r = await fetch(url, { headers: { 'X-Auth-Token': apiKey } });
     const data = await r.json();
     const names = (data.teams || []).map(t => t.name);
     res.json({ ok: r.ok, competition, teams: names });
-  } catch (err) {
-    res.json({ ok: false, reason: err.message });
-  }
-});
-
-app.get('/api/providers/football-data/pl-check', async (req, res) => {
-  const apiKey = process.env.FOOTBALL_DATA_API_KEY;
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
-  try {
-    const url = 'https://api.football-data.org/v4/competitions/PL/matches?dateFrom=2026-09-08&dateTo=2026-09-20';
-    const r = await fetch(url, { headers: { 'X-Auth-Token': apiKey } });
-    const data = await r.json();
-    res.json({ ok: r.ok, status: r.status, count: data.matches?.length ?? 0, raw: data });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
