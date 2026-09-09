@@ -91,6 +91,10 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
 .gauge .lbl { color: var(--dim); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
 .pill { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--border); color: var(--dim); }
 
+.suggestion-panel { border-color: var(--gold); }
+.suggestion-panel .sm-title { font-size: 1.05rem; color: var(--gold); }
+.debug-issue { color: var(--red); font-size: .72rem; margin-top: 4px; }
+
 .tabbar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; display: flex; background: rgba(13,15,24,0.92); backdrop-filter: blur(12px); border-top: 1px solid var(--border); padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); }
 .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; color: var(--dim); font-family: 'Rajdhani'; font-size: .72rem; padding: 6px 0; letter-spacing: .03em; position: relative; }
 .tab.active { color: var(--gold); }
@@ -306,6 +310,19 @@ document.getElementById('scan-btn').addEventListener('click', async () => {
 const COMP_NAMES = { PL: 'Premier League', PD: 'Primera Division', BL1: 'Bundesliga', SA: 'Serie A', FL1: 'Ligue 1', BSA: 'Campeonato Brasileiro Série A' };
 function matchesComp(ev, code) { return ev.competition.name === COMP_NAMES[code]; }
 
+// ---------- suggested market (deterministic, no AI involved) ----------
+const MARKET_LABELS = {
+  home: (a) => `${a.home_team} Win`, draw: () => 'Draw', away: (a) => `${a.away_team} Win`,
+  over25: () => 'Over 2.5 Goals', under25: () => 'Under 2.5 Goals',
+  btts: () => 'Both Teams to Score', bttsNo: () => 'Both Teams to Score — No',
+};
+function suggestedMarket(a) {
+  const entries = Object.entries(a.probabilities);
+  entries.sort((x, y) => y[1] - x[1]);
+  const [key, val] = entries[0];
+  return { key, label: MARKET_LABELS[key] ? MARKET_LABELS[key](a) : key, probability: val };
+}
+
 // ---------- briefing overlay ----------
 const overlay = document.getElementById('briefing-overlay');
 document.getElementById('close-briefing').addEventListener('click', () => overlay.classList.remove('active'));
@@ -332,6 +349,7 @@ async function openBriefing(comp, home, away) {
 function renderBriefing(body, a) {
   const p = a.probabilities;
   const b = a.briefing;
+  const sm = suggestedMarket(a);
   body.innerHTML = `
     <div class="panel">
       <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
@@ -342,6 +360,11 @@ function renderBriefing(body, a) {
         <div class="field mono-small">BTTS: ${p.btts}%</div>
       </div>
     </div>
+    <div class="panel suggestion-panel">
+      <div class="section-label" style="margin-top:0">Model Suggestion</div>
+      <div class="rj sm-title">${sm.label} — ${sm.probability}%</div>
+      <div class="mono-small">Highest-probability market from this analysis. Not a recommendation to act on.</div>
+    </div>
     <div class="section-label">Model Lean</div><p class="body-text">${b.modelLean}</p>
     <div class="section-label">Situation</div><p class="body-text">${b.situation}</p>
     <div class="section-label">Primary Signal</div><p class="body-text">${b.primarySignal}</p>
@@ -351,6 +374,7 @@ function renderBriefing(body, a) {
     <p class="body-text">${(b.counterfactual.conditions || []).join(' · ') || b.counterfactual.whatToWatch}</p>
     <div class="section-label">One Question To Ask Yourself</div><p class="body-text" style="color:var(--gold)">${b.decisionQuestion}</p>
     <div class="mono-small" style="margin-top:16px">${a.analysis_id} · saved to Journal · source: ${a.briefing_source}</div>
+    ${a.briefing_source === 'fallback' && a.briefing_issue ? `<div class="debug-issue">AI reasoning unavailable: ${a.briefing_issue}</div>` : ''}
   `;
 }
 
@@ -370,13 +394,18 @@ async function loadJournal() {
       <span class="pill">${a.status}</span>
     </div>
     <div class="mono-small" style="margin-top:8px">Home ${p.home}% · Draw ${p.draw}% · Away ${p.away}%</div>`;
+    el.addEventListener('click', () => {
+      overlay.classList.add('active');
+      document.getElementById('briefing-title').textContent = `${a.home_team} vs ${a.away_team}`;
+      renderBriefing(document.getElementById('briefing-body'), a);
+    });
     if (a.status === 'pending') {
       const btn = document.createElement('button');
       btn.className = 'btn ghost rj'; btn.textContent = 'Run Replay'; btn.style.marginTop = '10px';
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         btn.textContent = 'Checking…';
-        const r = await api(`/api/analyses/${a.analysis_id}/replay`);
+        await api(`/api/analyses/${a.analysis_id}/replay`);
         loadJournal();
       });
       el.appendChild(btn);
@@ -411,10 +440,25 @@ async function loadLedger() {
     <div class="panel"><span class="pill">${s.sampleBand} sample</span></div>
     <div class="panel">${compRows}</div>
   `;
+
+  const completed = await api('/api/analyses?status=completed');
+  const historyHtml = completed.analyses.map((a) => `
+    <div class="panel history-card" data-id="${a.analysis_id}" style="cursor:pointer">
+      <div class="rj">${a.home_team} vs ${a.away_team}</div>
+      <div class="mono-small" style="color:${a.outcome_correct ? 'var(--teal)' : 'var(--red)'}">Final ${a.actual_score.home}-${a.actual_score.away} · Lean ${a.outcome_correct ? 'correct' : 'wrong'} · Brier ${Number(a.brier_score).toFixed(3)}</div>
+    </div>`).join('');
+  el.insertAdjacentHTML('beforeend', `<div class="section-label">Analysis History</div>${historyHtml}`);
+  document.querySelectorAll('.history-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const a = completed.analyses.find((x) => x.analysis_id === card.dataset.id);
+      overlay.classList.add('active');
+      document.getElementById('briefing-title').textContent = `${a.home_team} vs ${a.away_team}`;
+      renderBriefing(document.getElementById('briefing-body'), a);
+    });
+  });
 }
 
 // ---------- tickets ----------
-let selectedLegs = [];
 async function loadTickets() {
   const journal = await api('/api/analyses?status=pending');
   const builderList = document.getElementById('ticket-builder-list');
@@ -461,4 +505,4 @@ document.getElementById('build-ticket-btn').addEventListener('click', async () =
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-</html>
+  </html>
