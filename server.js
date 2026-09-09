@@ -20,6 +20,15 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+function requireAuth(req, res, next) {
+  const appSecret = process.env.APP_SECRET;
+  if (!appSecret) return res.status(500).json({ ok: false, reason: 'app_secret_not_configured' });
+  const provided = req.query.key || req.headers['x-oracle-key'];
+  if (provided !== appSecret) return res.status(401).json({ ok: false, reason: 'unauthorized' });
+  next();
+}
+app.use('/api', requireAuth);
+
 app.get('/api/health', async (req, res) => {
   const health = { status: 'ok', time: new Date().toISOString(), database: 'not_configured' };
   if (pool) {
@@ -33,15 +42,6 @@ app.get('/api/health', async (req, res) => {
   }
   res.json(health);
 });
-
-function requireAuth(req, res, next) {
-  const appSecret = process.env.APP_SECRET;
-  if (!appSecret) return res.status(500).json({ ok: false, reason: 'app_secret_not_configured' });
-  const provided = req.query.key || req.headers['x-oracle-key'];
-  if (provided !== appSecret) return res.status(401).json({ ok: false, reason: 'unauthorized' });
-  next();
-}
-app.use('/api', requireAuth);
 
 async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
