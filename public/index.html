@@ -57,7 +57,7 @@ main { flex: 1; padding: 16px 16px 90px; max-width: 640px; width: 100%; margin: 
 .row { display: flex; gap: 8px; }
 .field { flex: 1; }
 label.rj { display: block; font-size: .72rem; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
-select, input[type=date] { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'Inter'; }
+select, input[type=date], input[type=number] { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'Inter'; }
 .btn { background: linear-gradient(135deg, var(--gold), var(--violet)); color: #05060a; border: none; padding: 12px 18px; border-radius: 6px; font-family: 'Rajdhani'; font-weight: 700; letter-spacing: .03em; cursor: pointer; width: 100%; margin-top: 10px; transition: transform .12s, box-shadow .12s; }
 .btn:active { transform: scale(.97); }
 .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
@@ -91,10 +91,17 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
 .gauge .num { font-size: 2.6rem; background: linear-gradient(135deg, var(--gold), var(--violet)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .gauge .lbl { color: var(--dim); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; margin-top: 4px; }
 .pill { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--border); color: var(--dim); }
+.pill.won { color: var(--teal); border-color: var(--teal); }
+.pill.lost { color: var(--red); border-color: var(--red); }
 
 .suggestion-panel { border-color: var(--gold); }
 .suggestion-panel .sm-title { font-size: 1.05rem; color: var(--gold); }
 .debug-issue { color: var(--red); font-size: .72rem; margin-top: 4px; }
+
+.swipe-row { overflow: hidden; border-radius: 8px; margin-top: 8px; position: relative; border: 1px solid var(--border); }
+.swipe-content { background: var(--panel-2); padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; transition: transform .2s ease; touch-action: pan-y; }
+.swipe-delete { position: absolute; top: 0; right: 0; bottom: 0; width: 80px; background: var(--red); color: #05060a; display: flex; align-items: center; justify-content: center; font-family: 'Rajdhani'; font-weight: 700; font-size: .8rem; }
+.draft-empty { text-align: center; padding: 16px; color: var(--dim); font-size: .8rem; }
 
 .tabbar { position: fixed; bottom: 0; left: 0; right: 0; z-index: 30; display: flex; background: rgba(13,15,24,0.92); backdrop-filter: blur(12px); border-top: 1px solid var(--border); padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); }
 .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: none; border: none; color: var(--dim); font-family: 'Rajdhani'; font-size: .72rem; padding: 6px 0; letter-spacing: .03em; position: relative; }
@@ -160,12 +167,20 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
     </section>
 
     <section class="view" id="view-tickets">
+      <div class="panel gauge" style="padding:16px">
+        <div class="num" id="bankroll-num">—</div><div class="lbl">Virtual Bankroll</div>
+      </div>
       <div id="suggested-tickets"></div>
       <div class="panel">
-        <div class="section-label">Build a ticket manually</div>
-        <div id="ticket-builder-list" class="mono-small">Save a few analyses in the Journal first, then tap them here.</div>
-        <button class="btn rj" id="build-ticket-btn" style="display:none">Build Ticket</button>
+        <div class="section-label" style="margin-top:0">Build a ticket</div>
+        <div id="draft-legs"><div class="draft-empty">No legs added yet</div></div>
+        <select id="add-leg-select" style="margin-top:10px"></select>
+        <button class="btn ghost rj" id="add-leg-btn" style="margin-top:8px">+ Add Fixture</button>
+        <label class="rj" style="margin-top:14px">Stake (optional)</label>
+        <input type="number" id="stake-input" placeholder="0" min="0" step="1">
+        <button class="btn rj" id="save-draft-btn">Save Ticket</button>
       </div>
+      <button class="btn ghost rj" id="settle-btn">Check Open Ticket Settlements</button>
       <div id="tickets-list"></div>
     </section>
   </main>
@@ -215,7 +230,6 @@ function tick() {
 }
 tick();
 
-// ---------- custom cursor (pointer devices only) ----------
 if (matchMedia('(pointer: fine)').matches) {
   const dot = document.getElementById('cursor-dot');
   const ring = document.getElementById('cursor-ring');
@@ -225,7 +239,6 @@ if (matchMedia('(pointer: fine)').matches) {
   });
 }
 
-// ---------- auth gate ----------
 const KEY_STORAGE = 'apex-oracle-key';
 let API_KEY = localStorage.getItem(KEY_STORAGE);
 const gate = document.getElementById('gate');
@@ -242,18 +255,13 @@ document.getElementById('gate-btn').addEventListener('click', async () => {
   const val = document.getElementById('key-input').value.trim();
   if (!val) return;
   const res = await fetch(`/api/health?key=${encodeURIComponent(val)}`);
-  if (res.status === 401) {
-    document.getElementById('gate-err').textContent = 'Invalid key';
-    return;
-  }
+  if (res.status === 401) { document.getElementById('gate-err').textContent = 'Invalid key'; return; }
   API_KEY = val;
   localStorage.setItem(KEY_STORAGE, val);
   enterApp();
 });
-
 if (API_KEY) enterApp();
 
-// ---------- api helper ----------
 async function api(path) {
   const sep = path.includes('?') ? '&' : '?';
   const res = await fetch(`${path}${sep}key=${encodeURIComponent(API_KEY)}`);
@@ -271,7 +279,6 @@ async function checkHealth() {
   }
 }
 
-// ---------- tab navigation ----------
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
@@ -284,10 +291,8 @@ document.querySelectorAll('.tab').forEach((tab) => {
   });
 });
 
-// ---------- fixtures ----------
 function loadFixturesDefault() {
-  const today = new Date().toISOString().slice(0, 10);
-  document.getElementById('date-select').value = today;
+  document.getElementById('date-select').value = new Date().toISOString().slice(0, 10);
 }
 
 document.getElementById('scan-btn').addEventListener('click', async () => {
@@ -312,7 +317,6 @@ document.getElementById('scan-btn').addEventListener('click', async () => {
 const COMP_NAMES = { PL: 'Premier League', PD: 'Primera Division', BL1: 'Bundesliga', SA: 'Serie A', FL1: 'Ligue 1', BSA: 'Campeonato Brasileiro Série A' };
 function matchesComp(ev, code) { return ev.competition.name === COMP_NAMES[code]; }
 
-// ---------- suggested market (deterministic, no AI involved) ----------
 const MARKET_LABELS = {
   home: (a) => `${a.home_team} Win`, draw: () => 'Draw', away: (a) => `${a.away_team} Win`,
   over25: () => 'Over 2.5 Goals', under25: () => 'Under 2.5 Goals',
@@ -325,7 +329,6 @@ function suggestedMarket(a) {
   return { key, label: MARKET_LABELS[key] ? MARKET_LABELS[key](a) : key, probability: val };
 }
 
-// ---------- briefing overlay ----------
 const overlay = document.getElementById('briefing-overlay');
 document.getElementById('close-briefing').addEventListener('click', () => overlay.classList.remove('active'));
 
@@ -337,10 +340,8 @@ async function openBriefing(comp, home, away) {
   body.innerHTML = `<div class="scan-lines"><div class="scan-dot"></div><div id="scan-text" class="rj">${steps[0]}</div></div>`;
   let i = 0;
   const stepTimer = setInterval(() => { i = (i + 1) % steps.length; const el = document.getElementById('scan-text'); if (el) el.textContent = steps[i]; }, 900);
-
   const data = await api(`/api/analyze-and-save?competition=${comp}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`);
   clearInterval(stepTimer);
-
   if (!data.ok) {
     body.innerHTML = `<div class="empty">${data.reason || 'Unable to analyze this fixture.'}<br><span class="mono-small">${data.reason === 'insufficient_sample' ? 'Not enough finished matches yet for a reliable read.' : ''}</span></div>`;
     return;
@@ -380,7 +381,6 @@ function renderBriefing(body, a) {
   `;
 }
 
-// ---------- journal ----------
 async function loadJournal() {
   const list = document.getElementById('journal-list');
   const data = await api('/api/analyses');
@@ -423,7 +423,6 @@ async function loadJournal() {
   });
 }
 
-// ---------- ledger ----------
 async function loadLedger() {
   const el = document.getElementById('ledger-content');
   const s = await api('/api/ledger');
@@ -432,9 +431,7 @@ async function loadLedger() {
     `<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)"><span>${k}</span><span class="mono-small">${v.correct}/${v.total}</span></div>`
   ).join('');
   el.innerHTML = `
-    <div class="panel gauge">
-      <div class="num">${s.accuracy}%</div><div class="lbl">Model Lean Accuracy</div>
-    </div>
+    <div class="panel gauge"><div class="num">${s.accuracy}%</div><div class="lbl">Model Lean Accuracy</div></div>
     <div class="row">
       <div class="panel field" style="text-align:center"><div class="num rj" style="font-size:1.6rem">${s.averageBrierScore}</div><div class="lbl">Avg Brier Score</div></div>
       <div class="panel field" style="text-align:center"><div class="num rj" style="font-size:1.6rem">${s.totalCompleted}</div><div class="lbl">Completed</div></div>
@@ -442,7 +439,6 @@ async function loadLedger() {
     <div class="panel"><span class="pill">${s.sampleBand} sample</span></div>
     <div class="panel">${compRows}</div>
   `;
-
   const completed = await api('/api/analyses?status=completed');
   const historyHtml = completed.analyses.map((a) => `
     <div class="panel history-card" data-id="${a.analysis_id}" style="cursor:pointer">
@@ -460,8 +456,79 @@ async function loadLedger() {
   });
 }
 
-// ---------- tickets ----------
+// ---------- tickets: suggestions, draft builder w/ swipe, bankroll, settlement ----------
+let pendingCache = [];
+let draftLegs = []; // { analysisId, fixture, market, probability, analysis }
+
+function makeSwipeRow(innerHtml, onDelete) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'swipe-row';
+  wrapper.innerHTML = `<div class="swipe-content">${innerHtml}</div><div class="swipe-delete">Remove</div>`;
+  const content = wrapper.querySelector('.swipe-content');
+  let startX = 0, dx = 0, dragging = false;
+  content.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; dragging = true; }, { passive: true });
+  content.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
+    dx = e.touches[0].clientX - startX;
+    if (dx < 0) content.style.transform = `translateX(${Math.max(dx, -90)}px)`;
+  }, { passive: true });
+  content.addEventListener('touchend', () => {
+    dragging = false;
+    content.style.transform = dx < -55 ? 'translateX(-80px)' : 'translateX(0)';
+    dx = 0;
+  });
+  wrapper.querySelector('.swipe-delete').addEventListener('click', onDelete);
+  return wrapper;
+}
+
+function renderDraft() {
+  const box = document.getElementById('draft-legs');
+  box.innerHTML = '';
+  if (!draftLegs.length) { box.innerHTML = '<div class="draft-empty">No legs added yet</div>'; }
+  draftLegs.forEach((leg, idx) => {
+    const html = `<span>${leg.fixture} — ${leg.market} (${leg.probability}%)</span>`;
+    const row = makeSwipeRow(html, () => { draftLegs.splice(idx, 1); renderDraft(); });
+    box.appendChild(row);
+  });
+
+  const select = document.getElementById('add-leg-select');
+  const inDraft = new Set(draftLegs.map((l) => l.analysisId));
+  const available = pendingCache.filter((a) => !inDraft.has(a.analysis_id));
+  select.innerHTML = available.map((a) => `<option value="${a.analysis_id}">${a.home_team} vs ${a.away_team}</option>`).join('') || '<option value="">No more pending fixtures</option>';
+}
+
+document.getElementById('add-leg-btn').addEventListener('click', () => {
+  const id = document.getElementById('add-leg-select').value;
+  if (!id) return;
+  const a = pendingCache.find((x) => x.analysis_id === id);
+  if (!a) return;
+  const sm = suggestedMarket(a);
+  draftLegs.push({ analysisId: a.analysis_id, fixture: `${a.home_team} vs ${a.away_team}`, market: sm.key, probability: sm.probability, analysis: a });
+  renderDraft();
+});
+
+document.getElementById('save-draft-btn').addEventListener('click', async () => {
+  if (!draftLegs.length) return;
+  const stake = document.getElementById('stake-input').value;
+  const legs = draftLegs.map((l) => `${l.analysisId}:${l.market}`).join(',');
+  const url = stake ? `/api/ticket/build?legs=${encodeURIComponent(legs)}&stake=${stake}` : `/api/ticket/build?legs=${encodeURIComponent(legs)}`;
+  const res = await api(url);
+  if (!res.ok) { alert(res.reason === 'insufficient_balance' ? `Not enough bankroll (balance: ${res.balance})` : res.reason); return; }
+  draftLegs = [];
+  document.getElementById('stake-input').value = '';
+  loadTickets();
+});
+
+document.getElementById('settle-btn').addEventListener('click', async () => {
+  const open = await api('/api/tickets?status=open');
+  for (const t of open.tickets) { await api(`/api/ticket/${t.ticket_id}/settle`); }
+  loadTickets();
+});
+
 async function loadTickets() {
+  const bankroll = await api('/api/bankroll');
+  document.getElementById('bankroll-num').textContent = bankroll.ok ? `$${Number(bankroll.balance).toFixed(2)}` : '—';
+
   const suggBox = document.getElementById('suggested-tickets');
   const sugg = await api('/api/ticket/suggest');
   if (sugg.ok) {
@@ -469,15 +536,19 @@ async function loadTickets() {
       <div class="panel">
         <div class="rj" style="color:var(--violet)">${s.label} — ${s.combinedProbability}% combined</div>
         ${s.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}
+        <input type="number" class="sugg-stake" data-idx="${i}" placeholder="Stake (optional)" min="0" style="margin-top:8px">
         <button class="btn small rj save-suggestion" data-idx="${i}">Save This Ticket</button>
       </div>`).join('') + `<div class="mono-small" style="margin-bottom:12px">${sugg.suggestions[0]?.note || ''}</div>`;
 
     suggBox.querySelectorAll('.save-suggestion').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const s = sugg.suggestions[btn.dataset.idx];
+        const stakeVal = document.querySelector(`.sugg-stake[data-idx="${btn.dataset.idx}"]`).value;
         const legs = s.legs.map((l) => `${l.analysisId}:${l.market}`).join(',');
+        const url = stakeVal ? `/api/ticket/build?legs=${encodeURIComponent(legs)}&stake=${stakeVal}` : `/api/ticket/build?legs=${encodeURIComponent(legs)}`;
         btn.textContent = 'Saving…';
-        await api(`/api/ticket/build?legs=${encodeURIComponent(legs)}`);
+        const res = await api(url);
+        if (!res.ok) { alert(res.reason === 'insufficient_balance' ? `Not enough bankroll (balance: ${res.balance})` : res.reason); }
         loadTickets();
       });
     });
@@ -486,22 +557,8 @@ async function loadTickets() {
   }
 
   const journal = await api('/api/analyses?status=pending');
-  const builderList = document.getElementById('ticket-builder-list');
-  if (!journal.analyses.length) { builderList.innerHTML = 'No pending analyses to build with yet.'; }
-  else {
-    builderList.innerHTML = '';
-    journal.analyses.forEach((a) => {
-      const row = document.createElement('div');
-      row.style.padding = '8px 0'; row.style.borderBottom = '1px solid var(--border)';
-      row.innerHTML = `<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-id="${a.analysis_id}"> ${a.home_team} vs ${a.away_team}
-        <select data-market-for="${a.analysis_id}" style="width:auto;margin-left:auto">
-          <option value="home">Home</option><option value="draw">Draw</option><option value="away">Away</option>
-          <option value="over25">Over 2.5</option><option value="under25">Under 2.5</option><option value="btts">BTTS</option><option value="bttsno">BTTS No</option>
-        </select></label>`;
-      builderList.appendChild(row);
-    });
-    document.getElementById('build-ticket-btn').style.display = 'block';
-  }
+  pendingCache = journal.analyses;
+  renderDraft();
 
   const ticketsList = document.getElementById('tickets-list');
   const t = await api('/api/tickets');
@@ -509,25 +566,18 @@ async function loadTickets() {
   t.tickets.forEach((tk) => {
     const el = document.createElement('div');
     el.className = 'panel';
-    el.innerHTML = `<div class="rj" style="color:var(--gold)">${tk.combined_probability}% combined</div>
-      ${tk.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}`;
+    const profit = tk.status === 'won' ? `+${(Number(tk.payout) - Number(tk.stake)).toFixed(2)}` : tk.status === 'lost' ? `-${Number(tk.stake).toFixed(2)}` : null;
+    el.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center">
+        <div class="rj" style="color:var(--gold)">${tk.combined_probability}% combined</div>
+        <span class="pill ${tk.status}">${tk.status}</span>
+      </div>
+      ${tk.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}
+      ${Number(tk.stake) > 0 ? `<div class="mono-small" style="margin-top:6px">Stake: $${Number(tk.stake).toFixed(2)}${profit ? ` · P/L: ${profit}` : ''}</div>` : ''}`;
     ticketsList.appendChild(el);
   });
 }
 
-document.getElementById('build-ticket-btn').addEventListener('click', async () => {
-  const checked = Array.from(document.querySelectorAll('#ticket-builder-list input[type=checkbox]:checked'));
-  if (!checked.length) return;
-  const legs = checked.map((c) => {
-    const id = c.dataset.id;
-    const market = document.querySelector(`[data-market-for="${id}"]`).value;
-    return `${id}:${market}`;
-  }).join(',');
-  await api(`/api/ticket/build?legs=${encodeURIComponent(legs)}`);
-  loadTickets();
-});
-
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-  </html>
+</html>
