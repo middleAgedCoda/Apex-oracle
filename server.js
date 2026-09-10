@@ -6,13 +6,14 @@ const { findResult, brierScore, leanCorrect } = require('./lib/analysis/replay')
 const { buildTicket } = require('./lib/analysis/ticket');
 const { pickSuggestions } = require('./lib/analysis/ticket-suggester');
 const { marketHit } = require('./lib/analysis/settlement');
+const { runAutonomousScan } = require('./lib/analysis/autonomous-scan');
 const { MODEL_VERSION, PROMPT_VERSION } = require('./lib/analysis/versions');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
 const {
   pool, migrate, saveEvents, listEvents,
-  saveAnalysis, listAnalyses, getAnalysis, getPendingAnalysisFor, updateAnalysisOutcome,
+  saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome, updateAnalysisBriefing,
   saveTicket, listTickets, getTicket, updateTicketSettlement,
   getBankroll, adjustBankroll, ledgerStats,
 } = require('./lib/db');
@@ -127,9 +128,6 @@ app.get('/api/analyze-and-save', async (req, res) => {
     return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
   }
 
-  const existing = await getPendingAnalysisFor(competition, home, away);
-  if (existing) return res.json({ ok: true, analysis: existing, reused: true });
-
   const result = await runAnalysis(competition, home, away);
   if (!result.ok) return res.json(result);
 
@@ -185,6 +183,27 @@ app.get('/api/analyses/:analysisId/replay', async (req, res) => {
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
+});
+
+app.get('/api/analyses/:analysisId/generate-briefing', async (req, res) => {
+  const analysis = await getAnalysis(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
+  if (analysis.briefing_source !== 'deferred') return res.json({ ok: true, analysis, alreadyGenerated: true });
+
+  const evidence = {
+    competition: analysis.competition,
+    fixture: { home: analysis.home_team, away: analysis.away_team },
+    lambdas: analysis.lambdas,
+    probabilities: analysis.probabilities,
+    usedPriorSeason: analysis.used_prior_season,
+  };
+  const briefingResult = await generateBriefing(evidence);
+  const updated = await updateAnalysisBriefing(analysis.analysis_id, {
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+  });
+  res.json({ ok: true, analysis: updated });
 });
 
 app.get('/api/ledger', async (req, res) => {
@@ -274,6 +293,12 @@ app.get('/api/ticket/:ticketId/settle', async (req, res) => {
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
+});
+
+app.get('/api/oracle/autonomous-scan', async (req, res) => {
+  const days = req.query.days ? Number(req.query.days) : 7;
+  const result = await runAutonomousScan({ days, modelVersion: MODEL_VERSION, promptVersion: PROMPT_VERSION });
+  res.json(result);
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
