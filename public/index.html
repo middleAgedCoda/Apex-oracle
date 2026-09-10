@@ -154,6 +154,8 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
           </div>
         </div>
         <button class="btn rj" id="scan-btn">Scan Fixtures</button>
+        <button class="btn ghost rj" id="auto-scan-btn">Run Autonomous Scan (All Leagues)</button>
+        <div id="auto-scan-status" class="mono-small" style="margin-top:6px"></div>
       </div>
       <div id="fixtures-list"></div>
     </section>
@@ -314,6 +316,13 @@ document.getElementById('scan-btn').addEventListener('click', async () => {
   });
 });
 
+document.getElementById('auto-scan-btn').addEventListener('click', async () => {
+  const status = document.getElementById('auto-scan-status');
+  status.textContent = 'Scanning all leagues, next 7 days…';
+  const result = await api('/api/oracle/autonomous-scan?days=7');
+  status.textContent = result.ok ? `Scanned ${result.scanned}, saved ${result.saved} new, ${result.skipped} already known.` : `Failed: ${result.reason}`;
+});
+
 const COMP_NAMES = { PL: 'Premier League', PD: 'Primera Division', BL1: 'Bundesliga', SA: 'Serie A', FL1: 'Ligue 1', BSA: 'Campeonato Brasileiro Série A' };
 function matchesComp(ev, code) { return ev.competition.name === COMP_NAMES[code]; }
 
@@ -351,9 +360,42 @@ async function openBriefing(comp, home, away) {
 
 function renderBriefing(body, a) {
   const p = a.probabilities;
-  const b = a.briefing;
   const sm = suggestedMarket(a);
   const priorSeasonNote = a.used_prior_season ? `<div class="mono-small" style="color:var(--violet);margin-bottom:8px">⚠ Includes prior-season results — current season sample was too small alone.</div>` : '';
+
+  if (a.briefing_source === 'deferred') {
+    body.innerHTML = `
+      ${priorSeasonNote}
+      <div class="panel">
+        <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
+        <div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>
+        <div class="bar-row"><div class="bar-label"><span>${a.away_team}</span><span class="num">${p.away}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.away}%"></div></div></div>
+        <div class="row" style="margin-top:8px">
+          <div class="field mono-small">Over 2.5: ${p.over25}%</div>
+          <div class="field mono-small">BTTS: ${p.btts}%</div>
+        </div>
+      </div>
+      <div class="panel suggestion-panel">
+        <div class="section-label" style="margin-top:0">Model Suggestion</div>
+        <div class="rj sm-title">${sm.label} — ${sm.probability}%</div>
+        <div class="mono-small">Highest-probability market from this analysis. Not a recommendation to act on.</div>
+      </div>
+      <div class="panel">
+        <div class="section-label" style="margin-top:0">AI narrative not yet generated</div>
+        <div class="mono-small" style="margin-bottom:10px">This came from an autonomous scan — only the numbers above were computed. Generate the full Oracle Briefing narrative now?</div>
+        <button class="btn rj" id="inline-generate-btn">Generate Full Briefing</button>
+      </div>
+      <div class="mono-small" style="margin-top:16px">${a.analysis_id} · saved to Journal</div>
+    `;
+    document.getElementById('inline-generate-btn').addEventListener('click', async (ev) => {
+      ev.target.textContent = 'Generating…';
+      const res = await api(`/api/analyses/${a.analysis_id}/generate-briefing`);
+      if (res.ok) renderBriefing(body, res.analysis);
+    });
+    return;
+  }
+
+  const b = a.briefing;
   body.innerHTML = `
     ${priorSeasonNote}
     <div class="panel">
@@ -403,6 +445,17 @@ async function loadJournal() {
       document.getElementById('briefing-title').textContent = `${a.home_team} vs ${a.away_team}`;
       renderBriefing(document.getElementById('briefing-body'), a);
     });
+    if (a.briefing_source === 'deferred') {
+      const genBtn = document.createElement('button');
+      genBtn.className = 'btn rj'; genBtn.textContent = 'Generate Full Briefing'; genBtn.style.marginTop = '10px';
+      genBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        genBtn.textContent = 'Generating…';
+        await api(`/api/analyses/${a.analysis_id}/generate-briefing`);
+        loadJournal();
+      });
+      el.appendChild(genBtn);
+    }
     if (a.status === 'pending') {
       const btn = document.createElement('button');
       btn.className = 'btn ghost rj'; btn.textContent = 'Run Replay'; btn.style.marginTop = '10px';
@@ -581,4 +634,4 @@ async function loadTickets() {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-</html>
+  </html>
