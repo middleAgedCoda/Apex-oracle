@@ -5,6 +5,7 @@ const { generateBriefing } = require('./lib/analysis/briefing');
 const { findResult, brierScore, leanCorrect } = require('./lib/analysis/replay');
 const { buildTicket } = require('./lib/analysis/ticket');
 const { pickSuggestions } = require('./lib/analysis/ticket-suggester');
+const { marketHit } = require('./lib/analysis/settlement');
 const { MODEL_VERSION, PROMPT_VERSION } = require('./lib/analysis/versions');
 const express = require('express');
 const path = require('path');
@@ -12,7 +13,8 @@ const { gatherEvents } = require('./lib/data-mesh');
 const {
   pool, migrate, saveEvents, listEvents,
   saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome,
-  saveTicket, listTickets, ledgerStats,
+  saveTicket, listTickets, getTicket, updateTicketSettlement,
+  getBankroll, adjustBankroll, ledgerStats,
 } = require('./lib/db');
 
 const app = express();
@@ -165,9 +167,19 @@ app.get('/api/ledger', async (req, res) => {
   res.json(stats);
 });
 
+app.get('/api/bankroll', async (req, res) => {
+  const balance = await getBankroll();
+  res.json({ ok: true, balance });
+});
+
 app.get('/api/ticket/build', async (req, res) => {
-  const { legs } = req.query;
+  const { legs, stake } = req.query;
   if (!legs) return res.status(400).json({ ok: false, reason: 'missing_legs', format: 'analysisId:market,analysisId:market' });
+
+  const stakeAmount = stake ? Number(stake) : 0;
+  if (stake && (isNaN(stakeAmount) || stakeAmount <= 0)) {
+    return res.json({ ok: false, reason: 'invalid_stake' });
+  }
 
   try {
     const pairs = legs.split(',').map((s) => s.trim().split(':'));
@@ -183,7 +195,13 @@ app.get('/api/ticket/build', async (req, res) => {
     const result = buildTicket(analyses, markets);
     if (!result.ok) return res.json(result);
 
-    const saved = await saveTicket({ legs: result.legs, combinedProbability: result.combinedProbability });
+    if (stakeAmount > 0) {
+      const balance = await getBankroll();
+      if (stakeAmount > balance) return res.json({ ok: false, reason: 'insufficient_balance', balance });
+      await adjustBankroll(-stakeAmount);
+    }
+
+    const saved = await saveTicket({ legs: result.legs, combinedProbability: result.combinedProbability, stake: stakeAmount });
     res.json({ ok: true, ticket: saved, note: result.note });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
@@ -198,8 +216,39 @@ app.get('/api/ticket/suggest', async (req, res) => {
 });
 
 app.get('/api/tickets', async (req, res) => {
-  const tickets = await listTickets();
+  const { status } = req.query;
+  const tickets = await listTickets({ status });
   res.json({ count: tickets.length, tickets });
+});
+
+app.get('/api/ticket/:ticketId/settle', async (req, res) => {
+  try {
+    const ticket = await getTicket(req.params.ticketId);
+    if (!ticket) return res.status(404).json({ ok: false, reason: 'not_found' });
+    if (ticket.status !== 'open') return res.json({ ok: true, ticket, alreadySettled: true });
+
+    const legResults = [];
+    for (const leg of ticket.legs) {
+      const analysis = await getAnalysis(leg.analysisId);
+      if (!analysis || analysis.status !== 'completed') {
+        return res.json({ ok: false, reason: 'not_all_legs_completed' });
+      }
+      legResults.push({ ...leg, hit: marketHit(analysis.actual_score, leg.market) });
+    }
+
+    const allHit = legResults.every((l) => l.hit === true);
+    let payout = 0;
+    if (allHit && Number(ticket.stake) > 0) {
+      const decimalOdds = 100 / Number(ticket.combined_probability);
+      payout = Math.round(Number(ticket.stake) * decimalOdds * 100) / 100;
+      await adjustBankroll(payout);
+    }
+
+    const updated = await updateTicketSettlement(ticket.ticket_id, { status: allHit ? 'won' : 'lost', payout });
+    res.json({ ok: true, ticket: updated, legResults });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
