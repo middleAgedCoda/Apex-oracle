@@ -12,7 +12,7 @@ const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
 const {
   pool, migrate, saveEvents, listEvents,
-  saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome,
+  saveAnalysis, listAnalyses, getAnalysis, getPendingAnalysisFor, updateAnalysisOutcome,
   saveTicket, listTickets, getTicket, updateTicketSettlement,
   getBankroll, adjustBankroll, ledgerStats,
 } = require('./lib/db');
@@ -50,12 +50,31 @@ async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
   if (!apiKey) return { ok: false, reason: 'no_football_data_key' };
 
-  const matches = await fetchFinishedMatches(competition, apiKey);
-  const leagueAvg = leagueAverages(matches);
-  if (!leagueAvg) return { ok: false, reason: 'no_finished_matches_yet', competition };
+  let { matches, seasonYear } = await fetchFinishedMatches(competition, apiKey);
+  let leagueAvg = leagueAverages(matches);
+  let homeStrength = leagueAvg ? teamStrength(matches, home, leagueAvg) : { sufficient: false };
+  let awayStrength = leagueAvg ? teamStrength(matches, away, leagueAvg) : { sufficient: false };
+  let usedPriorSeason = false;
 
-  const homeStrength = teamStrength(matches, home, leagueAvg);
-  const awayStrength = teamStrength(matches, away, leagueAvg);
+  const insufficient = !leagueAvg || !homeStrength.sufficient || !awayStrength.sufficient;
+  if (insufficient && seasonYear) {
+    try {
+      const priorSeason = String(Number(seasonYear) - 1);
+      const prior = await fetchFinishedMatches(competition, apiKey, priorSeason);
+      const combined = matches.concat(prior.matches);
+      const combinedAvg = leagueAverages(combined);
+      if (combinedAvg) {
+        const combinedHome = teamStrength(combined, home, combinedAvg);
+        const combinedAway = teamStrength(combined, away, combinedAvg);
+        if (combinedHome.sufficient && combinedAway.sufficient) {
+          matches = combined; leagueAvg = combinedAvg; homeStrength = combinedHome; awayStrength = combinedAway;
+          usedPriorSeason = true;
+        }
+      }
+    } catch (e) { /* prior-season fetch failed, fall through to insufficient below */ }
+  }
+
+  if (!leagueAvg) return { ok: false, reason: 'no_finished_matches_yet', competition };
   if (!homeStrength.sufficient || !awayStrength.sufficient) {
     return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
   }
@@ -70,6 +89,7 @@ async function runAnalysis(competition, home, away) {
     evidence: {
       competition, fixture: { home, away }, leagueAverages: leagueAvg, lambdas, probabilities,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+      usedPriorSeason,
     },
   };
 }
@@ -106,11 +126,15 @@ app.get('/api/analyze-and-save', async (req, res) => {
   if (!competition || !home || !away) {
     return res.status(400).json({ ok: false, reason: 'missing_params', required: ['competition', 'home', 'away'] });
   }
+
+  const existing = await getPendingAnalysisFor(competition, home, away);
+  if (existing) return res.json({ ok: true, analysis: existing, reused: true });
+
   const result = await runAnalysis(competition, home, away);
   if (!result.ok) return res.json(result);
 
   const briefingResult = await generateBriefing(result.evidence);
-  const { lambdas, probabilities } = result.evidence;
+  const { lambdas, probabilities, usedPriorSeason } = result.evidence;
 
   const saved = await saveAnalysis({
     competition, home, away, lambdas, probabilities,
@@ -119,6 +143,7 @@ app.get('/api/analyze-and-save', async (req, res) => {
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: MODEL_VERSION,
     promptVersion: PROMPT_VERSION,
+    usedPriorSeason,
   });
 
   res.json({ ok: true, analysis: saved });
