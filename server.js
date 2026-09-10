@@ -4,6 +4,7 @@ const { computeProbabilities } = require('./lib/analysis/poisson');
 const { generateBriefing } = require('./lib/analysis/briefing');
 const { findResult, brierScore, leanCorrect } = require('./lib/analysis/replay');
 const { buildTicket } = require('./lib/analysis/ticket');
+const { pickSuggestions } = require('./lib/analysis/ticket-suggester');
 const { MODEL_VERSION, PROMPT_VERSION } = require('./lib/analysis/versions');
 const express = require('express');
 const path = require('path');
@@ -187,6 +188,13 @@ app.get('/api/ticket/build', async (req, res) => {
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
+});
+
+app.get('/api/ticket/suggest', async (req, res) => {
+  const pending = await listAnalyses({ status: 'pending' });
+  if (!pending.length) return res.json({ ok: false, reason: 'no_pending_analyses' });
+  const suggestions = pickSuggestions(pending);
+  res.json({ ok: true, suggestions });
 });
 
 app.get('/api/tickets', async (req, res) => {
