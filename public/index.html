@@ -61,6 +61,7 @@ select, input[type=date] { width: 100%; background: var(--panel-2); border: 1px 
 .btn { background: linear-gradient(135deg, var(--gold), var(--violet)); color: #05060a; border: none; padding: 12px 18px; border-radius: 6px; font-family: 'Rajdhani'; font-weight: 700; letter-spacing: .03em; cursor: pointer; width: 100%; margin-top: 10px; transition: transform .12s, box-shadow .12s; }
 .btn:active { transform: scale(.97); }
 .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn.small { padding: 8px 14px; font-size: .85rem; margin-top: 8px; }
 
 .fixture { display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; cursor: pointer; transition: border-color .15s, background .15s; }
 .fixture:active { background: var(--panel-2); border-color: var(--violet); }
@@ -159,8 +160,9 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
     </section>
 
     <section class="view" id="view-tickets">
+      <div id="suggested-tickets"></div>
       <div class="panel">
-        <div class="section-label">Build a ticket</div>
+        <div class="section-label">Build a ticket manually</div>
         <div id="ticket-builder-list" class="mono-small">Save a few analyses in the Journal first, then tap them here.</div>
         <button class="btn rj" id="build-ticket-btn" style="display:none">Build Ticket</button>
       </div>
@@ -460,6 +462,29 @@ async function loadLedger() {
 
 // ---------- tickets ----------
 async function loadTickets() {
+  const suggBox = document.getElementById('suggested-tickets');
+  const sugg = await api('/api/ticket/suggest');
+  if (sugg.ok) {
+    suggBox.innerHTML = '<div class="section-label" style="margin-top:0">Suggested Tickets</div>' + sugg.suggestions.map((s, i) => `
+      <div class="panel">
+        <div class="rj" style="color:var(--violet)">${s.label} — ${s.combinedProbability}% combined</div>
+        ${s.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}
+        <button class="btn small rj save-suggestion" data-idx="${i}">Save This Ticket</button>
+      </div>`).join('') + `<div class="mono-small" style="margin-bottom:12px">${sugg.suggestions[0]?.note || ''}</div>`;
+
+    suggBox.querySelectorAll('.save-suggestion').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const s = sugg.suggestions[btn.dataset.idx];
+        const legs = s.legs.map((l) => `${l.analysisId}:${l.market}`).join(',');
+        btn.textContent = 'Saving…';
+        await api(`/api/ticket/build?legs=${encodeURIComponent(legs)}`);
+        loadTickets();
+      });
+    });
+  } else {
+    suggBox.innerHTML = '';
+  }
+
   const journal = await api('/api/analyses?status=pending');
   const builderList = document.getElementById('ticket-builder-list');
   if (!journal.analyses.length) { builderList.innerHTML = 'No pending analyses to build with yet.'; }
@@ -480,7 +505,7 @@ async function loadTickets() {
 
   const ticketsList = document.getElementById('tickets-list');
   const t = await api('/api/tickets');
-  ticketsList.innerHTML = t.tickets.length ? '' : '<div class="empty">No tickets built yet.</div>';
+  ticketsList.innerHTML = t.tickets.length ? '<div class="section-label">Saved Tickets</div>' : '<div class="empty">No tickets saved yet.</div>';
   t.tickets.forEach((tk) => {
     const el = document.createElement('div');
     el.className = 'panel';
