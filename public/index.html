@@ -353,7 +353,9 @@ function renderBriefing(body, a) {
   const p = a.probabilities;
   const b = a.briefing;
   const sm = suggestedMarket(a);
+  const priorSeasonNote = a.used_prior_season ? `<div class="mono-small" style="color:var(--violet);margin-bottom:8px">⚠ Includes prior-season results — current season sample was too small alone.</div>` : '';
   body.innerHTML = `
+    ${priorSeasonNote}
     <div class="panel">
       <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
       <div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>
@@ -456,9 +458,8 @@ async function loadLedger() {
   });
 }
 
-// ---------- tickets: suggestions, draft builder w/ swipe, bankroll, settlement ----------
 let pendingCache = [];
-let draftLegs = []; // { analysisId, fixture, market, probability, analysis }
+let draftLegs = [];
 
 function makeSwipeRow(innerHtml, onDelete) {
   const wrapper = document.createElement('div');
