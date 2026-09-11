@@ -298,7 +298,8 @@ app.get('/api/ticket/:ticketId/settle', async (req, res) => {
 app.get('/api/oracle/autonomous-scan', async (req, res) => {
   const days = req.query.days ? Number(req.query.days) : 7;
   const result = await runAutonomousScan({ days, modelVersion: MODEL_VERSION, promptVersion: PROMPT_VERSION });
-  res.json(result);
+  console.log('autonomous-scan result:', JSON.stringify(result));
+  res.json({ ok: result.ok, reason: result.reason, scanned: result.scanned, saved: result.saved, skipped: result.skipped });
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
