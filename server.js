@@ -47,6 +47,21 @@ app.get('/api/health', async (req, res) => {
   res.json(health);
 });
 
+app.get('/api/providers/nvidia/models', async (req, res) => {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://integrate.api.nvidia.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+    const data = await r.json();
+    const ids = (data.data || []).map(m => m.id);
+    res.json({ ok: r.ok, status: r.status, count: ids.length, models: ids });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
   if (!apiKey) return { ok: false, reason: 'no_football_data_key' };
