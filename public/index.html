@@ -492,8 +492,17 @@ async function loadLedger() {
       <div class="panel field" style="text-align:center"><div class="num rj" style="font-size:1.6rem">${s.totalCompleted}</div><div class="lbl">Completed</div></div>
     </div>
     <div class="panel"><span class="pill">${s.sampleBand} sample</span></div>
+    <button class="btn ghost rj" id="recalibrate-btn">Recalibrate Model</button>
+    <div id="calibration-status" class="mono-small" style="margin-top:6px"></div>
     <div class="panel">${compRows}</div>
   `;
+  document.getElementById('recalibrate-btn').addEventListener('click', async () => {
+    const status = document.getElementById('calibration-status');
+    status.textContent = 'Recalculating calibration for all leagues…';
+    const result = await api('/api/oracle/recalibrate');
+    status.textContent = result.summary.map(s => `${s.competition}: ${s.sampleSize} results (${s.band}${s.applied ? ', active' : ''})`).join(' · ');
+  });
+
   const completed = await api('/api/analyses?status=completed');
   const historyHtml = completed.analyses.map((a) => `
     <div class="panel history-card" data-id="${a.analysis_id}" style="cursor:pointer">
@@ -634,4 +643,4 @@ async function loadTickets() {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-  </html>
+</html>
