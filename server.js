@@ -426,6 +426,34 @@ app.get('/api/providers/balldontlie/teams', async (req, res) => {
   }
 });
 
+app.get('/api/providers/balldontlie/nfl-games', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://api.balldontlie.io/nfl/v1/games?seasons[]=2025&per_page=3', {
+      headers: { Authorization: apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/providers/balldontlie/mlb-games', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://api.balldontlie.io/mlb/v1/games?seasons[]=2025&per_page=3', {
+      headers: { Authorization: apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/providers/balldontlie/games', async (req, res) => {
   const apiKey = process.env.BALLDONTLIE_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
