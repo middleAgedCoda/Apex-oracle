@@ -11,6 +11,11 @@ const { computeCalibration, MIN_SAMPLE_TO_APPLY } = require('./lib/analysis/cali
 const { MODEL_VERSION, PROMPT_VERSION, CALIBRATION_VERSION } = require('./lib/analysis/versions');
 const { fetchSeasonGames } = require('./lib/sports/basketball/provider');
 const basketball = require('./lib/sports/basketball/model');
+const nflProvider = require('./lib/sports/nfl/provider');
+const mlbProvider = require('./lib/sports/mlb/provider');
+const gaussianModel = require('./lib/sports/shared/gaussian-model');
+const poissonTeamStrength = require('./lib/sports/shared/poisson-team-strength');
+const poissonTwoOutcome = require('./lib/sports/shared/poisson-two-outcome');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
@@ -108,7 +113,7 @@ async function runAnalysis(competition, home, away) {
   return {
     ok: true,
     evidence: {
-      competition, fixture: { home, away }, leagueAverages: leagueAvg, lambdas, probabilities,
+      sport: 'football', competition, fixture: { home, away }, leagueAverages: leagueAvg, lambdas, probabilities,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
       usedPriorSeason, calibrationApplied,
     },
@@ -155,7 +160,7 @@ app.get('/api/analyze-and-save', async (req, res) => {
   const { lambdas, probabilities, usedPriorSeason } = result.evidence;
 
   const saved = await saveAnalysis({
-    competition, home, away, lambdas, probabilities,
+    sport: 'football', competition, home, away, lambdas, probabilities,
     briefing: briefingResult.briefing,
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
@@ -212,7 +217,8 @@ app.get('/api/analyses/:analysisId/generate-briefing', async (req, res) => {
   if (analysis.briefing_source !== 'deferred') return res.json({ ok: true, analysis, alreadyGenerated: true });
 
   const evidence = {
-    sport: 'football', competition: analysis.competition,
+    sport: analysis.sport || 'football',
+    competition: analysis.competition,
     fixture: { home: analysis.home_team, away: analysis.away_team },
     lambdas: analysis.lambdas,
     probabilities: analysis.probabilities,
@@ -426,6 +432,21 @@ app.get('/api/providers/balldontlie/teams', async (req, res) => {
   }
 });
 
+app.get('/api/providers/balldontlie/games', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const season = req.query.season || '2024';
+  try {
+    const r = await fetch(`https://api.balldontlie.io/nba/v1/games?seasons[]=${season}&per_page=5`, {
+      headers: { Authorization: apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/providers/balldontlie/nfl-games', async (req, res) => {
   const apiKey = process.env.BALLDONTLIE_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
@@ -454,22 +475,9 @@ app.get('/api/providers/balldontlie/mlb-games', async (req, res) => {
   }
 });
 
-app.get('/api/providers/balldontlie/games', async (req, res) => {
-  const apiKey = process.env.BALLDONTLIE_API_KEY;
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
-  const season = req.query.season || '2024';
-  try {
-    const r = await fetch(`https://api.balldontlie.io/nba/v1/games?seasons[]=${season}&per_page=5`, {
-      headers: { Authorization: apiKey }
-    });
-    const data = await r.json();
-    res.json({ ok: r.ok, status: r.status, sample: data });
-  } catch (err) {
-    res.json({ ok: false, reason: err.message });
-  }
-});
-
-const NBA_SEASON = '2025'; // balldontlie labels a season by its start year — 2025 means the 2025-26 season
+const NBA_SEASON = '2025';
+const NFL_SEASON = '2025';
+const MLB_SEASON = '2025';
 
 async function runBasketballAnalysis(homeTeamName, awayTeamName) {
   const apiKey = process.env.BALLDONTLIE_API_KEY;
@@ -536,6 +544,138 @@ app.get('/api/basketball/analyze-and-save', async (req, res) => {
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: 'AO-GAUSSIAN-1.0', promptVersion: PROMPT_VERSION,
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
+
+async function runNflAnalysis(homeTeamName, awayTeamName) {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_balldontlie_key' };
+
+  let games;
+  try {
+    games = await nflProvider.fetchSeasonGames(NFL_SEASON, apiKey);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+
+  const league = gaussianModel.leagueAverages(games);
+  if (!league) return { ok: false, reason: 'no_finished_games_yet' };
+
+  const findTeamId = (name) => {
+    const g = games.find((x) => x.homeTeamName === name || x.awayTeamName === name);
+    if (!g) return null;
+    return g.homeTeamName === name ? g.homeTeamId : g.awayTeamId;
+  };
+
+  const homeId = findTeamId(homeTeamName);
+  const awayId = findTeamId(awayTeamName);
+  if (!homeId || !awayId) return { ok: false, reason: 'team_not_found' };
+
+  const homeStrength = gaussianModel.teamStrength(games, homeId, league);
+  const awayStrength = gaussianModel.teamStrength(games, awayId, league);
+  if (!homeStrength.sufficient || !awayStrength.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
+  }
+
+  const expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
+  const expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+  const probabilities = gaussianModel.computeProbabilities(expectedHome, expectedAway, league.diffStdDev, 10);
+
+  return {
+    ok: true,
+    evidence: {
+      sport: 'nfl', competition: 'NFL', fixture: { home: homeTeamName, away: awayTeamName },
+      leagueAverages: league,
+      lambdas: { home: Math.round(expectedHome * 10) / 10, away: Math.round(expectedAway * 10) / 10 },
+      probabilities,
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    },
+  };
+}
+
+app.get('/api/nfl/analyze-and-save', async (req, res) => {
+  const { home, away } = req.query;
+  if (!home || !away) return res.status(400).json({ ok: false, reason: 'missing_params', required: ['home', 'away'] });
+
+  const result = await runNflAnalysis(home, away);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const saved = await saveAnalysis({
+    sport: 'nfl', competition: 'NFL', home, away,
+    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+    modelVersion: 'AO-GAUSSIAN-1.0', promptVersion: PROMPT_VERSION,
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
+
+async function runMlbAnalysis(homeTeamName, awayTeamName) {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_balldontlie_key' };
+
+  let games;
+  try {
+    games = await mlbProvider.fetchSeasonGames(MLB_SEASON, apiKey);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+
+  const league = poissonTeamStrength.leagueAverages(games);
+  if (!league) return { ok: false, reason: 'no_finished_games_yet' };
+
+  const findTeamId = (name) => {
+    const g = games.find((x) => x.homeTeamName === name || x.awayTeamName === name);
+    if (!g) return null;
+    return g.homeTeamName === name ? g.homeTeamId : g.awayTeamId;
+  };
+
+  const homeId = findTeamId(homeTeamName);
+  const awayId = findTeamId(awayTeamName);
+  if (!homeId || !awayId) return { ok: false, reason: 'team_not_found' };
+
+  const homeStrength = poissonTeamStrength.teamStrength(games, homeId, league);
+  const awayStrength = poissonTeamStrength.teamStrength(games, awayId, league);
+  if (!homeStrength.sufficient || !awayStrength.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
+  }
+
+  const expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
+  const expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+  const probabilities = poissonTwoOutcome.computeProbabilities(expectedHome, expectedAway);
+
+  return {
+    ok: true,
+    evidence: {
+      sport: 'mlb', competition: 'MLB', fixture: { home: homeTeamName, away: awayTeamName },
+      leagueAverages: league,
+      lambdas: { home: Math.round(expectedHome * 100) / 100, away: Math.round(expectedAway * 100) / 100 },
+      probabilities,
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    },
+  };
+}
+
+app.get('/api/mlb/analyze-and-save', async (req, res) => {
+  const { home, away } = req.query;
+  if (!home || !away) return res.status(400).json({ ok: false, reason: 'missing_params', required: ['home', 'away'] });
+
+  const result = await runMlbAnalysis(home, away);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const saved = await saveAnalysis({
+    sport: 'mlb', competition: 'MLB', home, away,
+    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+    modelVersion: 'AO-POISSON-2OUT-1.0', promptVersion: PROMPT_VERSION,
   });
 
   res.json({ ok: true, analysis: saved });
