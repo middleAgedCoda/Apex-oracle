@@ -374,6 +374,20 @@ app.get('/api/providers/football-data/competitions', async (req, res) => {
   }
 });
 
+app.get('/api/providers/balldontlie/teams', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://api.balldontlie.io/nba/v1/teams', {
+      headers: { Authorization: apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/providers/football-data/teams', async (req, res) => {
   const { competition } = req.query;
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
