@@ -140,6 +140,77 @@ app.get('/api/briefing', async (req, res) => {
   });
 });
 
+const NBA_SEASON = '2025'; // balldontlie labels a season by its start year — 2025 means the 2025-26 season
+
+async function runBasketballAnalysis(homeTeamName, awayTeamName) {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_balldontlie_key' };
+
+  let games;
+  try {
+    games = await fetchSeasonGames(NBA_SEASON, apiKey);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+
+  const league = basketball.leagueAverages(games);
+  if (!league) return { ok: false, reason: 'no_finished_games_yet' };
+
+  const findTeamId = (name) => {
+    const g = games.find((x) => x.home_team.full_name === name || x.visitor_team.full_name === name);
+    if (!g) return null;
+    return g.home_team.full_name === name ? g.home_team.id : g.visitor_team.id;
+  };
+
+  const homeId = findTeamId(homeTeamName);
+  const awayId = findTeamId(awayTeamName);
+  if (!homeId || !awayId) return { ok: false, reason: 'team_not_found' };
+
+  const homeStrength = basketball.teamStrength(games, homeId, league);
+  const awayStrength = basketball.teamStrength(games, awayId, league);
+  if (!homeStrength.sufficient || !awayStrength.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
+  }
+
+  const expectedHome = league.avgHomePoints * homeStrength.attackHome * awayStrength.defenseAway;
+  const expectedAway = league.avgAwayPoints * awayStrength.attackAway * homeStrength.defenseHome;
+  const probabilities = basketball.computeProbabilities(expectedHome, expectedAway, league.diffStdDev);
+
+  return {
+    ok: true,
+    evidence: {
+      sport: 'basketball', competition: 'NBA', fixture: { home: homeTeamName, away: awayTeamName },
+      leagueAverages: league,
+      lambdas: { home: Math.round(expectedHome * 10) / 10, away: Math.round(expectedAway * 10) / 10 },
+      probabilities,
+      projections: {
+        total: Math.round((expectedHome + expectedAway) * 10) / 10,
+        margin: Math.round((expectedHome - expectedAway) * 10) / 10,
+      },
+      sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
+    },
+  };
+}
+
+app.get('/api/basketball/analyze-and-save', async (req, res) => {
+  const { home, away } = req.query;
+  if (!home || !away) return res.status(400).json({ ok: false, reason: 'missing_params', required: ['home', 'away'] });
+
+  const result = await runBasketballAnalysis(home, away);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const saved = await saveAnalysis({
+    sport: 'basketball', competition: 'NBA', home, away,
+    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+    modelVersion: 'AO-GAUSSIAN-1.0', promptVersion: PROMPT_VERSION,
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
 app.get('/api/analyze-and-save', async (req, res) => {
   const { competition, home, away } = req.query;
   if (!competition || !home || !away) {
