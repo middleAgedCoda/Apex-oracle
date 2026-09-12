@@ -7,7 +7,8 @@ const { buildTicket } = require('./lib/analysis/ticket');
 const { pickSuggestions } = require('./lib/analysis/ticket-suggester');
 const { marketHit } = require('./lib/analysis/settlement');
 const { runAutonomousScan } = require('./lib/analysis/autonomous-scan');
-const { MODEL_VERSION, PROMPT_VERSION } = require('./lib/analysis/versions');
+const { computeCalibration, MIN_SAMPLE_TO_APPLY } = require('./lib/analysis/calibration');
+const { MODEL_VERSION, PROMPT_VERSION, CALIBRATION_VERSION } = require('./lib/analysis/versions');
 const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
@@ -16,6 +17,7 @@ const {
   saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome, updateAnalysisBriefing,
   saveTicket, listTickets, getTicket, updateTicketSettlement,
   getBankroll, adjustBankroll, ledgerStats,
+  saveCalibrationRecord, getLatestCalibration, listAllLatestCalibrations,
 } = require('./lib/db');
 
 const app = express();
@@ -47,20 +49,7 @@ app.get('/api/health', async (req, res) => {
   res.json(health);
 });
 
-app.get('/api/providers/nvidia/models', async (req, res) => {
-  const apiKey = process.env.NVIDIA_API_KEY;
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
-  try {
-    const r = await fetch('https://integrate.api.nvidia.com/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` }
-    });
-    const data = await r.json();
-    const ids = (data.data || []).map(m => m.id);
-    res.json({ ok: r.ok, status: r.status, count: ids.length, models: ids });
-  } catch (err) {
-    res.json({ ok: false, reason: err.message });
-  }
-});
+const LEAGUES = ['PL', 'PD', 'BL1', 'SA', 'FL1', 'BSA'];
 
 async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
@@ -95,8 +84,22 @@ async function runAnalysis(competition, home, away) {
     return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
   }
 
-  const lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
-  const lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
+  let lambdaHome = leagueAvg.avgHomeGoals * homeStrength.attackHome * awayStrength.defenseAway;
+  let lambdaAway = leagueAvg.avgAwayGoals * awayStrength.attackAway * homeStrength.defenseHome;
+
+  let calibrationApplied = null;
+  const calibration = await getLatestCalibration(competition);
+  if (calibration && calibration.sample_size >= MIN_SAMPLE_TO_APPLY) {
+    lambdaHome *= Number(calibration.home_multiplier);
+    lambdaAway *= Number(calibration.away_multiplier);
+    calibrationApplied = {
+      version: calibration.calibration_version,
+      sampleSize: calibration.sample_size,
+      homeMultiplier: Number(calibration.home_multiplier),
+      awayMultiplier: Number(calibration.away_multiplier),
+    };
+  }
+
   const probabilities = computeProbabilities(lambdaHome, lambdaAway);
   const lambdas = { home: Math.round(lambdaHome * 100) / 100, away: Math.round(lambdaAway * 100) / 100 };
 
@@ -105,7 +108,7 @@ async function runAnalysis(competition, home, away) {
     evidence: {
       competition, fixture: { home, away }, leagueAverages: leagueAvg, lambdas, probabilities,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
-      usedPriorSeason,
+      usedPriorSeason, calibrationApplied,
     },
   };
 }
@@ -157,6 +160,7 @@ app.get('/api/analyze-and-save', async (req, res) => {
     modelVersion: MODEL_VERSION,
     promptVersion: PROMPT_VERSION,
     usedPriorSeason,
+    calibrationVersion: result.evidence.calibrationApplied ? CALIBRATION_VERSION : null,
   });
 
   res.json({ ok: true, analysis: saved });
@@ -229,6 +233,31 @@ app.get('/api/ledger', async (req, res) => {
 app.get('/api/bankroll', async (req, res) => {
   const balance = await getBankroll();
   res.json({ ok: true, balance });
+});
+
+app.get('/api/oracle/recalibrate', async (req, res) => {
+  const summary = [];
+  for (const code of LEAGUES) {
+    const completed = await listAnalyses({ status: 'completed', competition: code });
+    const calc = computeCalibration(completed);
+    if (!calc) { summary.push({ competition: code, sampleSize: 0, band: 'insufficient' }); continue; }
+
+    await saveCalibrationRecord({
+      competition: code,
+      calibrationVersion: CALIBRATION_VERSION,
+      sampleSize: calc.sampleSize,
+      sampleBand: calc.band,
+      homeMultiplier: calc.homeMultiplier,
+      awayMultiplier: calc.awayMultiplier,
+    });
+    summary.push({ competition: code, ...calc, applied: calc.sampleSize >= 50 });
+  }
+  res.json({ ok: true, summary });
+});
+
+app.get('/api/oracle/calibrations', async (req, res) => {
+  const rows = await listAllLatestCalibrations();
+  res.json({ count: rows.length, calibrations: rows });
 });
 
 app.get('/api/ticket/build', async (req, res) => {
@@ -315,6 +344,21 @@ app.get('/api/oracle/autonomous-scan', async (req, res) => {
   const result = await runAutonomousScan({ days, modelVersion: MODEL_VERSION, promptVersion: PROMPT_VERSION });
   console.log('autonomous-scan result:', JSON.stringify(result));
   res.json({ ok: result.ok, reason: result.reason, scanned: result.scanned, saved: result.saved, skipped: result.skipped });
+});
+
+app.get('/api/providers/nvidia/models', async (req, res) => {
+  const apiKey = process.env.NVIDIA_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://integrate.api.nvidia.com/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` }
+    });
+    const data = await r.json();
+    const ids = (data.data || []).map(m => m.id);
+    res.json({ ok: r.ok, status: r.status, count: ids.length, models: ids });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
 });
 
 app.get('/api/providers/football-data/competitions', async (req, res) => {
