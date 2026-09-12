@@ -212,7 +212,7 @@ app.get('/api/analyses/:analysisId/generate-briefing', async (req, res) => {
   if (analysis.briefing_source !== 'deferred') return res.json({ ok: true, analysis, alreadyGenerated: true });
 
   const evidence = {
-    competition: analysis.competition,
+    sport: 'football', competition: analysis.competition,
     fixture: { home: analysis.home_team, away: analysis.away_team },
     lambdas: analysis.lambdas,
     probabilities: analysis.probabilities,
