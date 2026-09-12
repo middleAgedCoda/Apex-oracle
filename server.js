@@ -366,17 +366,18 @@ app.get('/api/providers/nvidia/models', async (req, res) => {
 app.get('/api/providers/nvidia/test', async (req, res) => {
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const model = req.query.model || 'nvidia/llama-3.1-nemotron-70b-instruct';
   try {
     const r = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        model,
         messages: [{ role: 'user', content: 'Say hello in one word.' }],
       }),
     });
     const text = await r.text();
-    res.json({ ok: r.ok, status: r.status, body: text });
+    res.json({ ok: r.ok, status: r.status, model, body: text });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
