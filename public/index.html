@@ -183,6 +183,7 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
         <button class="btn rj" id="save-draft-btn">Save Ticket</button>
       </div>
       <button class="btn ghost rj" id="settle-btn">Check Open Ticket Settlements</button>
+      <div id="settle-status" class="mono-small" style="margin-top:6px"></div>
       <div id="tickets-list"></div>
     </section>
   </main>
@@ -593,8 +594,16 @@ document.getElementById('save-draft-btn').addEventListener('click', async () => 
 });
 
 document.getElementById('settle-btn').addEventListener('click', async () => {
+  const statusEl = document.getElementById('settle-status');
+  statusEl.textContent = 'Checking open tickets…';
   const open = await api('/api/tickets?status=open');
-  for (const t of open.tickets) { await api(`/api/ticket/${t.ticket_id}/settle`); }
+  if (!open.tickets.length) { statusEl.textContent = 'No open tickets to check.'; return; }
+  let settled = 0;
+  for (const t of open.tickets) {
+    const res = await api(`/api/ticket/${t.ticket_id}/settle`);
+    if (res.ok && (res.ticket.status === 'won' || res.ticket.status === 'lost')) settled++;
+  }
+  statusEl.textContent = `${settled} of ${open.tickets.length} open ticket(s) settled. The rest are still waiting on their fixtures to finish.`;
   loadTickets();
 });
 
@@ -639,13 +648,50 @@ async function loadTickets() {
   t.tickets.forEach((tk) => {
     const el = document.createElement('div');
     el.className = 'panel';
+    el.style.cursor = 'pointer';
     const profit = tk.status === 'won' ? `+${(Number(tk.payout) - Number(tk.stake)).toFixed(2)}` : tk.status === 'lost' ? `-${Number(tk.stake).toFixed(2)}` : null;
+    const potentialPayout = (tk.status === 'open' && Number(tk.stake) > 0)
+      ? (Number(tk.stake) * (100 / Number(tk.combined_probability))).toFixed(2)
+      : null;
     el.innerHTML = `<div class="row" style="justify-content:space-between;align-items:center">
         <div class="rj" style="color:var(--gold)">${tk.combined_probability}% combined</div>
         <span class="pill ${tk.status}">${tk.status}</span>
       </div>
       ${tk.legs.map(l => `<div class="mono-small">${l.fixture} — ${l.market} (${l.probability}%)</div>`).join('')}
-      ${Number(tk.stake) > 0 ? `<div class="mono-small" style="margin-top:6px">Stake: $${Number(tk.stake).toFixed(2)}${profit ? ` · P/L: ${profit}` : ''}</div>` : ''}`;
+      ${Number(tk.stake) > 0 ? `<div class="mono-small" style="margin-top:6px">Stake: $${Number(tk.stake).toFixed(2)}${profit ? ` · P/L: ${profit}` : ''}${potentialPayout ? ` · Potential payout: $${potentialPayout}` : ''}</div>` : ''}
+      <div class="ticket-detail mono-small" style="margin-top:8px;display:none"></div>
+      ${tk.status === 'open' ? '<button class="btn ghost rj btn-check-ticket" style="margin-top:8px">Check This Ticket</button>' : ''}`;
+
+    const detailBox = el.querySelector('.ticket-detail');
+    el.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('btn-check-ticket')) return;
+      if (detailBox.style.display === 'none') {
+        detailBox.style.display = 'block';
+        detailBox.textContent = 'Loading leg status…';
+        const legStatuses = await Promise.all(tk.legs.map(async (l) => {
+          const res = await api(`/api/analyses/${l.analysisId}`);
+          return res.ok ? `${l.fixture}: ${res.analysis.status}` : `${l.fixture}: unknown`;
+        }));
+        detailBox.innerHTML = legStatuses.map((s) => `<div>${s}</div>`).join('');
+      } else {
+        detailBox.style.display = 'none';
+      }
+    });
+
+    const checkBtn = el.querySelector('.btn-check-ticket');
+    if (checkBtn) {
+      checkBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        checkBtn.textContent = 'Checking…';
+        const res = await api(`/api/ticket/${tk.ticket_id}/settle`);
+        if (res.ok && (res.ticket.status === 'won' || res.ticket.status === 'lost')) {
+          loadTickets();
+        } else {
+          checkBtn.textContent = res.reason === 'not_all_legs_completed' ? 'Not all legs finished yet' : 'Check This Ticket';
+        }
+      });
+    }
+
     ticketsList.appendChild(el);
   });
 }
