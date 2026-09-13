@@ -396,6 +396,13 @@ function renderBriefing(body, a) {
   }
 
   const b = a.briefing;
+  const marketResultsHtml = (a.market_results && a.market_results.length) ? `
+    <div class="panel">
+      <div class="section-label" style="margin-top:0">Replay — Market Results</div>
+      <div class="mono-small" style="margin-bottom:8px">Final: ${a.actual_score.home}-${a.actual_score.away}</div>
+      ${a.market_results.map(m => `<div class="row" style="justify-content:space-between;padding:4px 0"><span>${MARKET_LABELS[m.market] ? MARKET_LABELS[m.market](a) : m.market}</span><span style="color:${m.hit ? 'var(--teal)' : 'var(--red)'}">${m.hit ? '✓' : '✗'} ${m.probability}%</span></div>`).join('')}
+    </div>` : '';
+
   body.innerHTML = `
     ${priorSeasonNote}
     <div class="panel">
@@ -420,6 +427,7 @@ function renderBriefing(body, a) {
     <div class="section-label">Counterfactual — What Could Go Wrong</div>
     <p class="body-text">${(b.counterfactual.conditions || []).join(' · ') || b.counterfactual.whatToWatch}</p>
     <div class="section-label">One Question To Ask Yourself</div><p class="body-text" style="color:var(--gold)">${b.decisionQuestion}</p>
+    ${marketResultsHtml}
     <div class="mono-small" style="margin-top:16px">${a.analysis_id} · saved to Journal · source: ${a.briefing_source}</div>
     ${a.briefing_source === 'fallback' && a.briefing_issue ? `<div class="debug-issue">AI reasoning unavailable: ${a.briefing_issue}</div>` : ''}
   `;
@@ -471,7 +479,9 @@ async function loadJournal() {
       outcome.className = 'mono-small';
       outcome.style.marginTop = '8px';
       outcome.style.color = a.outcome_correct ? 'var(--teal)' : 'var(--red)';
-      outcome.textContent = `Final: ${a.actual_score.home}-${a.actual_score.away} · Lean was ${a.outcome_correct ? 'correct' : 'wrong'} · Brier ${Number(a.brier_score).toFixed(3)}`;
+      const hits = (a.market_results || []).filter(m => m.hit).length;
+      const total = (a.market_results || []).length;
+      outcome.textContent = `Final: ${a.actual_score.home}-${a.actual_score.away} · Lean ${a.outcome_correct ? 'correct' : 'wrong'} · ${hits}/${total} markets hit · Brier ${Number(a.brier_score).toFixed(3)}`;
       el.appendChild(outcome);
     }
     list.appendChild(el);
@@ -507,7 +517,7 @@ async function loadLedger() {
   const historyHtml = completed.analyses.map((a) => `
     <div class="panel history-card" data-id="${a.analysis_id}" style="cursor:pointer">
       <div class="rj">${a.home_team} vs ${a.away_team}</div>
-      <div class="mono-small" style="color:${a.outcome_correct ? 'var(--teal)' : 'var(--red)'}">Final ${a.actual_score.home}-${a.actual_score.away} · Lean ${a.outcome_correct ? 'correct' : 'wrong'} · Brier ${Number(a.brier_score).toFixed(3)}</div>
+      <div class="mono-small" style="color:${a.outcome_correct ? 'var(--teal)' : 'var(--red)'}">Final ${a.actual_score.home}-${a.actual_score.away} · Lean ${a.outcome_correct ? 'correct' : 'wrong'} · ${(a.market_results||[]).filter(m=>m.hit).length}/${(a.market_results||[]).length} markets · Brier ${Number(a.brier_score).toFixed(3)}</div>
     </div>`).join('');
   el.insertAdjacentHTML('beforeend', `<div class="section-label">Analysis History</div>${historyHtml}`);
   document.querySelectorAll('.history-card').forEach((card) => {
