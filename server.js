@@ -377,6 +377,21 @@ app.get('/api/providers/nvidia/models', async (req, res) => {
   }
 });
 
+app.get('/api/providers/cito/fighter', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const slug = req.query.slug || 'islam-makhachev';
+  try {
+    const r = await fetch(`https://api.citoapi.com/api/v1/ufc/fighters/${slug}`, {
+      headers: { 'x-api-key': apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/providers/cito/test', async (req, res) => {
   const apiKey = process.env.CITO_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
