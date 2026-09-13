@@ -20,7 +20,7 @@ const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
 const {
-  pool, migrate, saveEvents, listEvents,
+  pool, migrate, saveEvents, listEvents,backfillMarketResults,
   saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome, updateAnalysisBriefing,
   saveTicket, listTickets, getTicket, updateTicketSettlement,
   getBankroll, adjustBankroll, ledgerStats,
@@ -146,6 +146,11 @@ app.get('/api/briefing', async (req, res) => {
     briefingIssue: briefingResult.ok ? undefined : briefingResult.reason,
     briefing: briefingResult.briefing,
   });
+});
+
+app.get('/api/oracle/backfill-market-results', async (req, res) => {
+  const result = await backfillMarketResults();
+  res.json({ ok: true, ...result });
 });
 
 app.get('/api/analyze-and-save', async (req, res) => {
