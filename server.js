@@ -377,6 +377,20 @@ app.get('/api/providers/nvidia/models', async (req, res) => {
   }
 });
 
+app.get('/api/providers/cito/test', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  try {
+    const r = await fetch('https://api.citoapi.com/api/v1/ufc/events?limit=3', {
+      headers: { 'x-api-key': apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 app.get('/api/providers/nvidia/test', async (req, res) => {
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
