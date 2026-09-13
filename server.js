@@ -380,10 +380,11 @@ app.get('/api/providers/nvidia/models', async (req, res) => {
 app.get('/api/providers/cito/test', async (req, res) => {
   const apiKey = process.env.CITO_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const status = req.query.status || '';
+  const includeBouts = req.query.includeBouts || 'true';
   try {
-    const r = await fetch('https://api.citoapi.com/api/v1/ufc/events?limit=3', {
-      headers: { 'x-api-key': apiKey }
-    });
+    const url = `https://api.citoapi.com/api/v1/ufc/events?limit=2&status=${status}&includeBouts=${includeBouts}`;
+    const r = await fetch(url, { headers: { 'x-api-key': apiKey } });
     const data = await r.json();
     res.json({ ok: r.ok, status: r.status, sample: data });
   } catch (err) {
