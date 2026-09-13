@@ -57,6 +57,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 const LEAGUES = ['PL', 'PD', 'BL1', 'SA', 'FL1', 'BSA'];
+const ALL_COMPETITIONS = [...LEAGUES, 'NBA', 'NFL', 'MLB'];
 
 async function runAnalysis(competition, home, away) {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
@@ -198,14 +199,16 @@ app.get('/api/analyses/:analysisId/replay', async (req, res) => {
     const probabilities = analysis.probabilities;
     const correct = leanCorrect(probabilities, result.actualOutcome);
     const brier = brierScore(probabilities, result.actualOutcome);
+    const actualScore = { home: result.homeGoals, away: result.awayGoals };
+    const marketResults = Object.entries(probabilities).map(([market, probability]) => ({
+      market, probability, hit: marketHit(actualScore, market),
+    }));
 
     const updated = await updateAnalysisOutcome(analysis.analysis_id, {
-      actualScore: { home: result.homeGoals, away: result.awayGoals },
-      outcomeCorrect: correct,
-      brierScore: brier,
+      actualScore, outcomeCorrect: correct, brierScore: brier, marketResults,
     });
 
-    res.json({ ok: true, analysis: updated, replay: { actualOutcome: result.actualOutcome, leanWasCorrect: correct, brierScore: brier } });
+    res.json({ ok: true, analysis: updated, replay: { actualOutcome: result.actualOutcome, leanWasCorrect: correct, brierScore: brier, marketResults } });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
@@ -245,7 +248,7 @@ app.get('/api/bankroll', async (req, res) => {
 
 app.get('/api/oracle/recalibrate', async (req, res) => {
   const summary = [];
-  for (const code of LEAGUES) {
+  for (const code of ALL_COMPETITIONS) {
     const completed = await listAnalyses({ status: 'completed', competition: code });
     const calc = computeCalibration(completed);
     if (!calc) { summary.push({ competition: code, sampleSize: 0, band: 'insufficient' }); continue; }
@@ -509,8 +512,17 @@ async function runBasketballAnalysis(homeTeamName, awayTeamName) {
     return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
   }
 
-  const expectedHome = league.avgHomePoints * homeStrength.attackHome * awayStrength.defenseAway;
-  const expectedAway = league.avgAwayPoints * awayStrength.attackAway * homeStrength.defenseHome;
+  let expectedHome = league.avgHomePoints * homeStrength.attackHome * awayStrength.defenseAway;
+  let expectedAway = league.avgAwayPoints * awayStrength.attackAway * homeStrength.defenseHome;
+
+  let calibrationApplied = null;
+  const calibration = await getLatestCalibration('NBA');
+  if (calibration && calibration.sample_size >= MIN_SAMPLE_TO_APPLY) {
+    expectedHome *= Number(calibration.home_multiplier);
+    expectedAway *= Number(calibration.away_multiplier);
+    calibrationApplied = { version: calibration.calibration_version, sampleSize: calibration.sample_size };
+  }
+
   const probabilities = basketball.computeProbabilities(expectedHome, expectedAway, league.diffStdDev);
 
   return {
@@ -519,7 +531,7 @@ async function runBasketballAnalysis(homeTeamName, awayTeamName) {
       sport: 'basketball', competition: 'NBA', fixture: { home: homeTeamName, away: awayTeamName },
       leagueAverages: league,
       lambdas: { home: Math.round(expectedHome * 10) / 10, away: Math.round(expectedAway * 10) / 10 },
-      probabilities,
+      probabilities, calibrationApplied,
       projections: {
         total: Math.round((expectedHome + expectedAway) * 10) / 10,
         margin: Math.round((expectedHome - expectedAway) * 10) / 10,
@@ -544,6 +556,7 @@ app.get('/api/basketball/analyze-and-save', async (req, res) => {
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: 'AO-GAUSSIAN-1.0', promptVersion: PROMPT_VERSION,
+    calibrationVersion: result.evidence.calibrationApplied ? CALIBRATION_VERSION : null,
   });
 
   res.json({ ok: true, analysis: saved });
@@ -579,8 +592,17 @@ async function runNflAnalysis(homeTeamName, awayTeamName) {
     return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
   }
 
-  const expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
-  const expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+  let expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
+  let expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+
+  let calibrationApplied = null;
+  const calibration = await getLatestCalibration('NFL');
+  if (calibration && calibration.sample_size >= MIN_SAMPLE_TO_APPLY) {
+    expectedHome *= Number(calibration.home_multiplier);
+    expectedAway *= Number(calibration.away_multiplier);
+    calibrationApplied = { version: calibration.calibration_version, sampleSize: calibration.sample_size };
+  }
+
   const probabilities = gaussianModel.computeProbabilities(expectedHome, expectedAway, league.diffStdDev, 10);
 
   return {
@@ -589,7 +611,7 @@ async function runNflAnalysis(homeTeamName, awayTeamName) {
       sport: 'nfl', competition: 'NFL', fixture: { home: homeTeamName, away: awayTeamName },
       leagueAverages: league,
       lambdas: { home: Math.round(expectedHome * 10) / 10, away: Math.round(expectedAway * 10) / 10 },
-      probabilities,
+      probabilities, calibrationApplied,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
     },
   };
@@ -610,6 +632,7 @@ app.get('/api/nfl/analyze-and-save', async (req, res) => {
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: 'AO-GAUSSIAN-1.0', promptVersion: PROMPT_VERSION,
+    calibrationVersion: result.evidence.calibrationApplied ? CALIBRATION_VERSION : null,
   });
 
   res.json({ ok: true, analysis: saved });
@@ -645,8 +668,17 @@ async function runMlbAnalysis(homeTeamName, awayTeamName) {
     return { ok: false, reason: 'insufficient_sample', detail: { home: homeStrength, away: awayStrength } };
   }
 
-  const expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
-  const expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+  let expectedHome = league.avgHomeScore * homeStrength.attackHome * awayStrength.defenseAway;
+  let expectedAway = league.avgAwayScore * awayStrength.attackAway * homeStrength.defenseHome;
+
+  let calibrationApplied = null;
+  const calibration = await getLatestCalibration('MLB');
+  if (calibration && calibration.sample_size >= MIN_SAMPLE_TO_APPLY) {
+    expectedHome *= Number(calibration.home_multiplier);
+    expectedAway *= Number(calibration.away_multiplier);
+    calibrationApplied = { version: calibration.calibration_version, sampleSize: calibration.sample_size };
+  }
+
   const probabilities = poissonTwoOutcome.computeProbabilities(expectedHome, expectedAway);
 
   return {
@@ -655,7 +687,7 @@ async function runMlbAnalysis(homeTeamName, awayTeamName) {
       sport: 'mlb', competition: 'MLB', fixture: { home: homeTeamName, away: awayTeamName },
       leagueAverages: league,
       lambdas: { home: Math.round(expectedHome * 100) / 100, away: Math.round(expectedAway * 100) / 100 },
-      probabilities,
+      probabilities, calibrationApplied,
       sampleSizes: { home: homeStrength.homeCount, away: awayStrength.awayCount },
     },
   };
@@ -676,6 +708,7 @@ app.get('/api/mlb/analyze-and-save', async (req, res) => {
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
     modelVersion: 'AO-POISSON-2OUT-1.0', promptVersion: PROMPT_VERSION,
+    calibrationVersion: result.evidence.calibrationApplied ? CALIBRATION_VERSION : null,
   });
 
   res.json({ ok: true, analysis: saved });
