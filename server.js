@@ -10,6 +10,8 @@ const { runAutonomousScan } = require('./lib/analysis/autonomous-scan');
 const { computeCalibration, MIN_SAMPLE_TO_APPLY } = require('./lib/analysis/calibration');
 const { MODEL_VERSION, PROMPT_VERSION, CALIBRATION_VERSION } = require('./lib/analysis/versions');
 const { fetchSeasonGames } = require('./lib/sports/basketball/provider');
+const ufcProvider = require('./lib/sports/ufc/provider');
+const ufcModel = require('./lib/sports/ufc/model');
 const basketball = require('./lib/sports/basketball/model');
 const nflProvider = require('./lib/sports/nfl/provider');
 const mlbProvider = require('./lib/sports/mlb/provider');
@@ -595,6 +597,87 @@ app.get('/api/basketball/analyze-and-save', async (req, res) => {
   });
 
   res.json({ ok: true, analysis: saved });
+});
+
+async function runUfcAnalysis(slugA, slugB) {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_cito_key' };
+
+  let fighterA, fighterB;
+  try {
+    fighterA = await ufcProvider.fetchFighter(slugA, apiKey);
+    fighterB = await ufcProvider.fetchFighter(slugB, apiKey);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+
+  const scoreA = ufcModel.computeFighterScore(fighterA);
+  const scoreB = ufcModel.computeFighterScore(fighterB);
+
+  if (!scoreA.sufficient || !scoreB.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { fighterA: scoreA, fighterB: scoreB } };
+  }
+
+  const probabilities = ufcModel.computeProbabilities(scoreA.score, scoreB.score);
+
+  return {
+    ok: true,
+    evidence: {
+      sport: 'ufc', competition: 'UFC',
+      fixture: { home: fighterA.name, away: fighterB.name },
+      lambdas: { home: Math.round(scoreA.score * 100) / 100, away: Math.round(scoreB.score * 100) / 100 },
+      probabilities,
+      sampleSizes: { home: scoreA.totalFights, away: scoreB.totalFights },
+    },
+  };
+}
+
+app.get('/api/ufc/analyze-and-save', async (req, res) => {
+  const { fighterA, fighterB } = req.query;
+  if (!fighterA || !fighterB) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['fighterA (slug)', 'fighterB (slug)'] });
+  }
+
+  const result = await runUfcAnalysis(fighterA, fighterB);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const saved = await saveAnalysis({
+    sport: 'ufc', competition: 'UFC', home: result.evidence.fixture.home, away: result.evidence.fixture.away,
+    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+    modelVersion: 'AO-UFC-HEURISTIC-1.0', promptVersion: PROMPT_VERSION,
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
+
+app.get('/api/analyses/:analysisId/complete-manual', async (req, res) => {
+  const { winner } = req.query;
+  if (winner !== 'home' && winner !== 'away') {
+    return res.status(400).json({ ok: false, reason: 'winner_must_be_home_or_away' });
+  }
+
+  const analysis = await getAnalysis(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
+
+  const actualScore = winner === 'home' ? { home: 1, away: 0 } : { home: 0, away: 1 };
+  const probabilities = analysis.probabilities;
+  const correct = (probabilities.home >= probabilities.away ? 'home' : 'away') === winner;
+  const p = { home: probabilities.home / 100, away: probabilities.away / 100 };
+  const actual = { home: winner === 'home' ? 1 : 0, away: winner === 'away' ? 1 : 0 };
+  const brier = Math.pow(p.home - actual.home, 2) + Math.pow(p.away - actual.away, 2);
+  const marketResults = Object.entries(probabilities).map(([market, probability]) => ({
+    market, probability, hit: marketHit(actualScore, market),
+  }));
+
+  const updated = await updateAnalysisOutcome(analysis.analysis_id, {
+    actualScore, outcomeCorrect: correct, brierScore: brier, marketResults,
+  });
+
+  res.json({ ok: true, analysis: updated });
 });
 
 async function runNflAnalysis(homeTeamName, awayTeamName) {
