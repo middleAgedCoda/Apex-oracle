@@ -12,8 +12,8 @@
 :root {
   --bg: #05060a; --panel: #0d0f18; --panel-2: #12141f;
   --border: rgba(255,255,255,0.07);
-  --gold: #f2a93b; --gold-glow: rgba(242,169,59,0.35);
-  --violet: #9d5cff; --violet-glow: rgba(157,92,255,0.35);
+  --gold: #b8763e; --gold-glow: rgba(184,118,62,0.35);
+  --violet: #4a7a96; --violet-glow: rgba(74,122,150,0.35);
   --teal: #00f5d4; --red: #ff6b6b;
   --text: #f5f3ee; --dim: #8b8fa3;
 }
@@ -57,7 +57,7 @@ main { flex: 1; padding: 16px 16px 90px; max-width: 640px; width: 100%; margin: 
 .row { display: flex; gap: 8px; }
 .field { flex: 1; }
 label.rj { display: block; font-size: .72rem; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }
-select, input[type=date], input[type=number] { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'Inter'; }
+select, input[type=date], input[type=number], input[type=text] { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'Inter'; }
 .btn { background: linear-gradient(135deg, var(--gold), var(--violet)); color: #05060a; border: none; padding: 12px 18px; border-radius: 6px; font-family: 'Rajdhani'; font-weight: 700; letter-spacing: .03em; cursor: pointer; width: 100%; margin-top: 10px; transition: transform .12s, box-shadow .12s; }
 .btn:active { transform: scale(.97); }
 .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
@@ -136,6 +136,17 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
   <main>
     <section class="view active" id="view-fixtures">
       <div class="panel">
+        <label class="rj">Sport</label>
+        <select id="sport-select">
+          <option value="football">Football</option>
+          <option value="basketball">Basketball (NBA)</option>
+          <option value="nfl">NFL</option>
+          <option value="mlb">MLB</option>
+          <option value="ufc">UFC</option>
+        </select>
+      </div>
+
+      <div class="panel" id="football-panel">
         <div class="row">
           <div class="field">
             <label class="rj">Competition</label>
@@ -157,6 +168,25 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
         <button class="btn ghost rj" id="auto-scan-btn">Run Autonomous Scan (All Leagues)</button>
         <div id="auto-scan-status" class="mono-small" style="margin-top:6px"></div>
       </div>
+
+      <div class="panel" id="matchup-panel" style="display:none">
+        <div id="team-inputs">
+          <label class="rj">Home Team</label>
+          <input type="text" id="matchup-home-input" placeholder="e.g. Boston Celtics">
+          <label class="rj" style="margin-top:10px">Away Team</label>
+          <input type="text" id="matchup-away-input" placeholder="e.g. Los Angeles Lakers">
+          <div class="mono-small" style="margin-top:6px">Use exact full team names.</div>
+        </div>
+        <div id="ufc-inputs" style="display:none">
+          <label class="rj">Fighter A (slug)</label>
+          <input type="text" id="fighter-a-input" placeholder="e.g. islam-makhachev">
+          <label class="rj" style="margin-top:10px">Fighter B (slug)</label>
+          <input type="text" id="fighter-b-input" placeholder="e.g. dan-hooker">
+          <div class="mono-small" style="margin-top:6px">Lowercase, hyphenated — matches UFC.com athlete URLs.</div>
+        </div>
+        <button class="btn rj" id="analyze-matchup-btn" style="margin-top:14px">Analyze Matchup</button>
+      </div>
+
       <div id="fixtures-list"></div>
     </section>
 
@@ -215,7 +245,7 @@ for (let i = 0; i < 45; i++) {
   particles.push({
     x: Math.random() * innerWidth, y: Math.random() * innerHeight,
     r: Math.random() * 1.4 + 0.4, vy: -(Math.random() * 0.25 + 0.05),
-    hue: Math.random() > 0.5 ? '242,169,59' : '157,92,255',
+    hue: Math.random() > 0.5 ? '184,118,62' : '74,122,150',
     o: Math.random() * 0.5 + 0.15,
   });
 }
@@ -298,6 +328,15 @@ function loadFixturesDefault() {
   document.getElementById('date-select').value = new Date().toISOString().slice(0, 10);
 }
 
+document.getElementById('sport-select').addEventListener('change', () => {
+  const sport = document.getElementById('sport-select').value;
+  document.getElementById('football-panel').style.display = sport === 'football' ? 'block' : 'none';
+  document.getElementById('matchup-panel').style.display = sport === 'football' ? 'none' : 'block';
+  document.getElementById('ufc-inputs').style.display = sport === 'ufc' ? 'block' : 'none';
+  document.getElementById('team-inputs').style.display = sport === 'ufc' ? 'none' : 'block';
+  document.getElementById('fixtures-list').innerHTML = '';
+});
+
 document.getElementById('scan-btn').addEventListener('click', async () => {
   const comp = document.getElementById('comp-select').value;
   const date = document.getElementById('date-select').value;
@@ -324,6 +363,23 @@ document.getElementById('auto-scan-btn').addEventListener('click', async () => {
   status.textContent = result.ok ? `Scanned ${result.scanned}, saved ${result.saved} new, ${result.skipped} already known.` : `Failed: ${result.reason}`;
 });
 
+document.getElementById('analyze-matchup-btn').addEventListener('click', async () => {
+  const sport = document.getElementById('sport-select').value;
+  if (sport === 'ufc') {
+    const a = document.getElementById('fighter-a-input').value.trim();
+    const b = document.getElementById('fighter-b-input').value.trim();
+    if (!a || !b) return;
+    const url = `/api/ufc/analyze-and-save?fighterA=${encodeURIComponent(a)}&fighterB=${encodeURIComponent(b)}`;
+    await runAnalysisFlow(url, a, b);
+  } else {
+    const home = document.getElementById('matchup-home-input').value.trim();
+    const away = document.getElementById('matchup-away-input').value.trim();
+    if (!home || !away) return;
+    const url = `/api/${sport}/analyze-and-save?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
+    await runAnalysisFlow(url, home, away);
+  }
+});
+
 const COMP_NAMES = { PL: 'Premier League', PD: 'Primera Division', BL1: 'Bundesliga', SA: 'Serie A', FL1: 'Ligue 1', BSA: 'Campeonato Brasileiro Série A' };
 function matchesComp(ev, code) { return ev.competition.name === COMP_NAMES[code]; }
 
@@ -342,7 +398,7 @@ function suggestedMarket(a) {
 const overlay = document.getElementById('briefing-overlay');
 document.getElementById('close-briefing').addEventListener('click', () => overlay.classList.remove('active'));
 
-async function openBriefing(comp, home, away) {
+async function runAnalysisFlow(url, home, away) {
   overlay.classList.add('active');
   document.getElementById('briefing-title').textContent = `${home} vs ${away}`;
   const body = document.getElementById('briefing-body');
@@ -350,31 +406,35 @@ async function openBriefing(comp, home, away) {
   body.innerHTML = `<div class="scan-lines"><div class="scan-dot"></div><div id="scan-text" class="rj">${steps[0]}</div></div>`;
   let i = 0;
   const stepTimer = setInterval(() => { i = (i + 1) % steps.length; const el = document.getElementById('scan-text'); if (el) el.textContent = steps[i]; }, 900);
-  const data = await api(`/api/analyze-and-save?competition=${comp}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`);
+  const data = await api(url);
   clearInterval(stepTimer);
   if (!data.ok) {
-    body.innerHTML = `<div class="empty">${data.reason || 'Unable to analyze this fixture.'}<br><span class="mono-small">${data.reason === 'insufficient_sample' ? 'Not enough finished matches yet for a reliable read.' : ''}</span></div>`;
+    body.innerHTML = `<div class="empty">${data.reason || 'Unable to analyze this matchup.'}<br><span class="mono-small">${data.reason === 'insufficient_sample' ? 'Not enough data yet for a reliable read.' : ''}</span></div>`;
     return;
   }
   renderBriefing(body, data.analysis);
+}
+
+async function openBriefing(comp, home, away) {
+  const url = `/api/analyze-and-save?competition=${comp}&home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
+  await runAnalysisFlow(url, home, away);
 }
 
 function renderBriefing(body, a) {
   const p = a.probabilities;
   const sm = suggestedMarket(a);
   const priorSeasonNote = a.used_prior_season ? `<div class="mono-small" style="color:var(--violet);margin-bottom:8px">⚠ Includes prior-season results — current season sample was too small alone.</div>` : '';
+  const drawRow = p.draw !== undefined ? `<div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>` : '';
+  const extraMarketsRow = (p.over25 !== undefined || p.btts !== undefined) ? `<div class="row" style="margin-top:8px">${p.over25 !== undefined ? `<div class="field mono-small">Over 2.5: ${p.over25}%</div>` : ''}${p.btts !== undefined ? `<div class="field mono-small">BTTS: ${p.btts}%</div>` : ''}</div>` : '';
 
   if (a.briefing_source === 'deferred') {
     body.innerHTML = `
       ${priorSeasonNote}
       <div class="panel">
         <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
-        <div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>
+        ${drawRow}
         <div class="bar-row"><div class="bar-label"><span>${a.away_team}</span><span class="num">${p.away}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.away}%"></div></div></div>
-        <div class="row" style="margin-top:8px">
-          <div class="field mono-small">Over 2.5: ${p.over25}%</div>
-          <div class="field mono-small">BTTS: ${p.btts}%</div>
-        </div>
+        ${extraMarketsRow}
       </div>
       <div class="panel suggestion-panel">
         <div class="section-label" style="margin-top:0">Model Suggestion</div>
@@ -408,12 +468,9 @@ function renderBriefing(body, a) {
     ${priorSeasonNote}
     <div class="panel">
       <div class="bar-row"><div class="bar-label"><span>${a.home_team}</span><span class="num">${p.home}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.home}%"></div></div></div>
-      <div class="bar-row"><div class="bar-label"><span>Draw</span><span class="num">${p.draw}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.draw}%"></div></div></div>
+      ${drawRow}
       <div class="bar-row"><div class="bar-label"><span>${a.away_team}</span><span class="num">${p.away}%</span></div><div class="bar-track"><div class="bar-fill" style="width:${p.away}%"></div></div></div>
-      <div class="row" style="margin-top:8px">
-        <div class="field mono-small">Over 2.5: ${p.over25}%</div>
-        <div class="field mono-small">BTTS: ${p.btts}%</div>
-      </div>
+      ${extraMarketsRow}
     </div>
     <div class="panel suggestion-panel">
       <div class="section-label" style="margin-top:0">Model Suggestion</div>
@@ -448,7 +505,7 @@ async function loadJournal() {
       <div><div class="rj">${a.home_team} vs ${a.away_team}</div><div class="mono-small">${a.competition} · ${a.analysis_id}</div></div>
       <span class="pill">${a.status}</span>
     </div>
-    <div class="mono-small" style="margin-top:8px">Home ${p.home}% · Draw ${p.draw}% · Away ${p.away}%</div>`;
+    <div class="mono-small" style="margin-top:8px">Home ${p.home}%${p.draw !== undefined ? ` · Draw ${p.draw}%` : ''} · Away ${p.away}%</div>`;
     el.addEventListener('click', () => {
       overlay.classList.add('active');
       document.getElementById('briefing-title').textContent = `${a.home_team} vs ${a.away_team}`;
@@ -699,4 +756,4 @@ async function loadTickets() {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-</html>
+  </html>
