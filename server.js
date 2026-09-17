@@ -9,12 +9,12 @@ const { marketHit } = require('./lib/analysis/settlement');
 const { runAutonomousScan } = require('./lib/analysis/autonomous-scan');
 const { computeCalibration, MIN_SAMPLE_TO_APPLY } = require('./lib/analysis/calibration');
 const { MODEL_VERSION, PROMPT_VERSION, CALIBRATION_VERSION } = require('./lib/analysis/versions');
-const { fetchSeasonGames } = require('./lib/sports/basketball/provider');
-const ufcProvider = require('./lib/sports/ufc/provider');
-const ufcModel = require('./lib/sports/ufc/model');
+const { fetchSeasonGames, fetchGamesByDate: fetchBasketballGamesByDate } = require('./lib/sports/basketball/provider');
 const basketball = require('./lib/sports/basketball/model');
 const nflProvider = require('./lib/sports/nfl/provider');
 const mlbProvider = require('./lib/sports/mlb/provider');
+const ufcProvider = require('./lib/sports/ufc/provider');
+const ufcModel = require('./lib/sports/ufc/model');
 const gaussianModel = require('./lib/sports/shared/gaussian-model');
 const poissonTeamStrength = require('./lib/sports/shared/poisson-team-strength');
 const poissonTwoOutcome = require('./lib/sports/shared/poisson-two-outcome');
@@ -22,7 +22,7 @@ const express = require('express');
 const path = require('path');
 const { gatherEvents } = require('./lib/data-mesh');
 const {
-  pool, migrate, saveEvents, listEvents,backfillMarketResults,
+  pool, migrate, saveEvents, listEvents,
   saveAnalysis, listAnalyses, getAnalysis, updateAnalysisOutcome, updateAnalysisBriefing,
   saveTicket, listTickets, getTicket, updateTicketSettlement,
   getBankroll, adjustBankroll, ledgerStats,
@@ -150,11 +150,6 @@ app.get('/api/briefing', async (req, res) => {
   });
 });
 
-app.get('/api/oracle/backfill-market-results', async (req, res) => {
-  const result = await backfillMarketResults();
-  res.json({ ok: true, ...result });
-});
-
 app.get('/api/analyze-and-save', async (req, res) => {
   const { competition, home, away } = req.query;
   if (!competition || !home || !away) {
@@ -240,6 +235,32 @@ app.get('/api/analyses/:analysisId/generate-briefing', async (req, res) => {
     briefingSource: briefingResult.ok ? 'ai' : 'fallback',
     briefingIssue: briefingResult.ok ? null : briefingResult.reason,
   });
+  res.json({ ok: true, analysis: updated });
+});
+
+app.get('/api/analyses/:analysisId/complete-manual', async (req, res) => {
+  const { winner } = req.query;
+  if (winner !== 'home' && winner !== 'away') {
+    return res.status(400).json({ ok: false, reason: 'winner_must_be_home_or_away' });
+  }
+
+  const analysis = await getAnalysis(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
+
+  const actualScore = winner === 'home' ? { home: 1, away: 0 } : { home: 0, away: 1 };
+  const probabilities = analysis.probabilities;
+  const correct = (probabilities.home >= probabilities.away ? 'home' : 'away') === winner;
+  const p = { home: probabilities.home / 100, away: probabilities.away / 100 };
+  const actual = { home: winner === 'home' ? 1 : 0, away: winner === 'away' ? 1 : 0 };
+  const brier = Math.pow(p.home - actual.home, 2) + Math.pow(p.away - actual.away, 2);
+  const marketResults = Object.entries(probabilities).map(([market, probability]) => ({
+    market, probability, hit: marketHit(actualScore, market),
+  }));
+
+  const updated = await updateAnalysisOutcome(analysis.analysis_id, {
+    actualScore, outcomeCorrect: correct, brierScore: brier, marketResults,
+  });
+
   res.json({ ok: true, analysis: updated });
 });
 
@@ -379,36 +400,6 @@ app.get('/api/providers/nvidia/models', async (req, res) => {
   }
 });
 
-app.get('/api/providers/cito/fighter', async (req, res) => {
-  const apiKey = process.env.CITO_API_KEY;
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
-  const slug = req.query.slug || 'islam-makhachev';
-  try {
-    const r = await fetch(`https://api.citoapi.com/api/v1/ufc/fighters/${slug}`, {
-      headers: { 'x-api-key': apiKey }
-    });
-    const data = await r.json();
-    res.json({ ok: r.ok, status: r.status, sample: data });
-  } catch (err) {
-    res.json({ ok: false, reason: err.message });
-  }
-});
-
-app.get('/api/providers/cito/test', async (req, res) => {
-  const apiKey = process.env.CITO_API_KEY;
-  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
-  const status = req.query.status || '';
-  const includeBouts = req.query.includeBouts || 'true';
-  try {
-    const url = `https://api.citoapi.com/api/v1/ufc/events?limit=2&status=${status}&includeBouts=${includeBouts}`;
-    const r = await fetch(url, { headers: { 'x-api-key': apiKey } });
-    const data = await r.json();
-    res.json({ ok: r.ok, status: r.status, sample: data });
-  } catch (err) {
-    res.json({ ok: false, reason: err.message });
-  }
-});
-
 app.get('/api/providers/nvidia/test', async (req, res) => {
   const apiKey = process.env.NVIDIA_API_KEY;
   if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
@@ -515,6 +506,36 @@ app.get('/api/providers/balldontlie/mlb-games', async (req, res) => {
   }
 });
 
+app.get('/api/providers/cito/test', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const status = req.query.status || '';
+  const includeBouts = req.query.includeBouts || 'true';
+  try {
+    const url = `https://api.citoapi.com/api/v1/ufc/events?limit=2&status=${status}&includeBouts=${includeBouts}`;
+    const r = await fetch(url, { headers: { 'x-api-key': apiKey } });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/providers/cito/fighter', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const slug = req.query.slug || 'islam-makhachev';
+  try {
+    const r = await fetch(`https://api.citoapi.com/api/v1/ufc/fighters/${slug}`, {
+      headers: { 'x-api-key': apiKey }
+    });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
 const NBA_SEASON = '2025';
 const NFL_SEASON = '2025';
 const MLB_SEASON = '2025';
@@ -597,87 +618,6 @@ app.get('/api/basketball/analyze-and-save', async (req, res) => {
   });
 
   res.json({ ok: true, analysis: saved });
-});
-
-async function runUfcAnalysis(slugA, slugB) {
-  const apiKey = process.env.CITO_API_KEY;
-  if (!apiKey) return { ok: false, reason: 'no_cito_key' };
-
-  let fighterA, fighterB;
-  try {
-    fighterA = await ufcProvider.fetchFighter(slugA, apiKey);
-    fighterB = await ufcProvider.fetchFighter(slugB, apiKey);
-  } catch (err) {
-    return { ok: false, reason: err.message };
-  }
-
-  const scoreA = ufcModel.computeFighterScore(fighterA);
-  const scoreB = ufcModel.computeFighterScore(fighterB);
-
-  if (!scoreA.sufficient || !scoreB.sufficient) {
-    return { ok: false, reason: 'insufficient_sample', detail: { fighterA: scoreA, fighterB: scoreB } };
-  }
-
-  const probabilities = ufcModel.computeProbabilities(scoreA.score, scoreB.score);
-
-  return {
-    ok: true,
-    evidence: {
-      sport: 'ufc', competition: 'UFC',
-      fixture: { home: fighterA.name, away: fighterB.name },
-      lambdas: { home: Math.round(scoreA.score * 100) / 100, away: Math.round(scoreB.score * 100) / 100 },
-      probabilities,
-      sampleSizes: { home: scoreA.totalFights, away: scoreB.totalFights },
-    },
-  };
-}
-
-app.get('/api/ufc/analyze-and-save', async (req, res) => {
-  const { fighterA, fighterB } = req.query;
-  if (!fighterA || !fighterB) {
-    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['fighterA (slug)', 'fighterB (slug)'] });
-  }
-
-  const result = await runUfcAnalysis(fighterA, fighterB);
-  if (!result.ok) return res.json(result);
-
-  const briefingResult = await generateBriefing(result.evidence);
-  const saved = await saveAnalysis({
-    sport: 'ufc', competition: 'UFC', home: result.evidence.fixture.home, away: result.evidence.fixture.away,
-    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
-    briefing: briefingResult.briefing,
-    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
-    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
-    modelVersion: 'AO-UFC-HEURISTIC-1.0', promptVersion: PROMPT_VERSION,
-  });
-
-  res.json({ ok: true, analysis: saved });
-});
-
-app.get('/api/analyses/:analysisId/complete-manual', async (req, res) => {
-  const { winner } = req.query;
-  if (winner !== 'home' && winner !== 'away') {
-    return res.status(400).json({ ok: false, reason: 'winner_must_be_home_or_away' });
-  }
-
-  const analysis = await getAnalysis(req.params.analysisId);
-  if (!analysis) return res.status(404).json({ ok: false, reason: 'not_found' });
-
-  const actualScore = winner === 'home' ? { home: 1, away: 0 } : { home: 0, away: 1 };
-  const probabilities = analysis.probabilities;
-  const correct = (probabilities.home >= probabilities.away ? 'home' : 'away') === winner;
-  const p = { home: probabilities.home / 100, away: probabilities.away / 100 };
-  const actual = { home: winner === 'home' ? 1 : 0, away: winner === 'away' ? 1 : 0 };
-  const brier = Math.pow(p.home - actual.home, 2) + Math.pow(p.away - actual.away, 2);
-  const marketResults = Object.entries(probabilities).map(([market, probability]) => ({
-    market, probability, hit: marketHit(actualScore, market),
-  }));
-
-  const updated = await updateAnalysisOutcome(analysis.analysis_id, {
-    actualScore, outcomeCorrect: correct, brierScore: brier, marketResults,
-  });
-
-  res.json({ ok: true, analysis: updated });
 });
 
 async function runNflAnalysis(homeTeamName, awayTeamName) {
@@ -830,6 +770,123 @@ app.get('/api/mlb/analyze-and-save', async (req, res) => {
   });
 
   res.json({ ok: true, analysis: saved });
+});
+
+async function runUfcAnalysis(slugA, slugB) {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return { ok: false, reason: 'no_cito_key' };
+
+  let fighterA, fighterB;
+  try {
+    fighterA = await ufcProvider.fetchFighter(slugA, apiKey);
+    fighterB = await ufcProvider.fetchFighter(slugB, apiKey);
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+
+  const scoreA = ufcModel.computeFighterScore(fighterA);
+  const scoreB = ufcModel.computeFighterScore(fighterB);
+
+  if (!scoreA.sufficient || !scoreB.sufficient) {
+    return { ok: false, reason: 'insufficient_sample', detail: { fighterA: scoreA, fighterB: scoreB } };
+  }
+
+  const probabilities = ufcModel.computeProbabilities(scoreA.score, scoreB.score);
+
+  return {
+    ok: true,
+    evidence: {
+      sport: 'ufc', competition: 'UFC',
+      fixture: { home: fighterA.name, away: fighterB.name },
+      lambdas: { home: Math.round(scoreA.score * 100) / 100, away: Math.round(scoreB.score * 100) / 100 },
+      probabilities,
+      sampleSizes: { home: scoreA.totalFights, away: scoreB.totalFights },
+    },
+  };
+}
+
+app.get('/api/ufc/analyze-and-save', async (req, res) => {
+  const { fighterA, fighterB } = req.query;
+  if (!fighterA || !fighterB) {
+    return res.status(400).json({ ok: false, reason: 'missing_params', required: ['fighterA (slug)', 'fighterB (slug)'] });
+  }
+
+  const result = await runUfcAnalysis(fighterA, fighterB);
+  if (!result.ok) return res.json(result);
+
+  const briefingResult = await generateBriefing(result.evidence);
+  const saved = await saveAnalysis({
+    sport: 'ufc', competition: 'UFC', home: result.evidence.fixture.home, away: result.evidence.fixture.away,
+    lambdas: result.evidence.lambdas, probabilities: result.evidence.probabilities,
+    briefing: briefingResult.briefing,
+    briefingSource: briefingResult.ok ? 'ai' : 'fallback',
+    briefingIssue: briefingResult.ok ? null : briefingResult.reason,
+    modelVersion: 'AO-UFC-HEURISTIC-1.0', promptVersion: PROMPT_VERSION,
+  });
+
+  res.json({ ok: true, analysis: saved });
+});
+
+app.get('/api/basketball/fixtures', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_balldontlie_key' });
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const games = await fetchBasketballGamesByDate(date, apiKey);
+    res.json({ ok: true, games });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/nfl/fixtures', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_balldontlie_key' });
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const games = await nflProvider.fetchGamesByDate(date, apiKey);
+    res.json({ ok: true, games });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/mlb/fixtures', async (req, res) => {
+  const apiKey = process.env.BALLDONTLIE_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_balldontlie_key' });
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const games = await mlbProvider.fetchGamesByDate(date, apiKey);
+    res.json({ ok: true, games });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/ufc/fixtures', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_cito_key' });
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  try {
+    const events = await ufcProvider.fetchEventsByDateRange(date, date, apiKey);
+    const bouts = [];
+    for (const ev of events) {
+      for (const b of (ev.bouts || [])) {
+        const red = (b.fighters || []).find((f) => f.corner === 'red');
+        const blue = (b.fighters || []).find((f) => f.corner === 'blue');
+        if (red && blue) {
+          bouts.push({
+            eventTitle: ev.title, weightClass: b.weightClass,
+            homeSlug: red.fighterSlug, homeName: red.fighterName,
+            awaySlug: blue.fighterSlug, awayName: blue.fighterName,
+          });
+        }
+      }
+    }
+    res.json({ ok: true, bouts });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
 });
 
 app.get('/api/events/mesh', async (req, res) => {
