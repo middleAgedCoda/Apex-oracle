@@ -170,6 +170,12 @@ p.body-text { line-height: 1.55; font-size: .93rem; color: #d8d6ce; }
       </div>
 
       <div class="panel" id="matchup-panel" style="display:none">
+        <label class="rj">Date</label>
+        <input type="date" id="matchup-date-select">
+        <button class="btn rj" id="scan-matchup-btn">Scan Fixtures</button>
+        <div id="matchup-scan-status" class="mono-small" style="margin-top:6px"></div>
+
+        <div class="section-label">Or enter manually</div>
         <div id="team-inputs">
           <label class="rj">Home Team</label>
           <input type="text" id="matchup-home-input" placeholder="e.g. Boston Celtics">
@@ -325,7 +331,9 @@ document.querySelectorAll('.tab').forEach((tab) => {
 });
 
 function loadFixturesDefault() {
-  document.getElementById('date-select').value = new Date().toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('date-select').value = today;
+  document.getElementById('matchup-date-select').value = today;
 }
 
 document.getElementById('sport-select').addEventListener('change', () => {
@@ -335,6 +343,7 @@ document.getElementById('sport-select').addEventListener('change', () => {
   document.getElementById('ufc-inputs').style.display = sport === 'ufc' ? 'block' : 'none';
   document.getElementById('team-inputs').style.display = sport === 'ufc' ? 'none' : 'block';
   document.getElementById('fixtures-list').innerHTML = '';
+  document.getElementById('matchup-scan-status').textContent = '';
 });
 
 document.getElementById('scan-btn').addEventListener('click', async () => {
@@ -361,6 +370,45 @@ document.getElementById('auto-scan-btn').addEventListener('click', async () => {
   status.textContent = 'Scanning all leagues, next 7 days…';
   const result = await api('/api/oracle/autonomous-scan?days=7');
   status.textContent = result.ok ? `Scanned ${result.scanned}, saved ${result.saved} new, ${result.skipped} already known.` : `Failed: ${result.reason}`;
+});
+
+document.getElementById('scan-matchup-btn').addEventListener('click', async () => {
+  const sport = document.getElementById('sport-select').value;
+  const date = document.getElementById('matchup-date-select').value || new Date().toISOString().slice(0, 10);
+  const status = document.getElementById('matchup-scan-status');
+  const list = document.getElementById('fixtures-list');
+  status.textContent = 'Scanning…';
+  list.innerHTML = '';
+
+  if (sport === 'ufc') {
+    const data = await api(`/api/ufc/fixtures?date=${date}`);
+    if (!data.ok || !data.bouts.length) { status.textContent = data.ok ? 'No UFC bouts found for this date.' : `Failed: ${data.reason}`; return; }
+    status.textContent = `${data.bouts.length} bout(s) found.`;
+    data.bouts.forEach((b) => {
+      const el = document.createElement('div');
+      el.className = 'fixture';
+      el.innerHTML = `<div><div class="comp rj">${b.eventTitle} · ${b.weightClass}</div><div class="teams">${b.homeName} vs ${b.awayName}</div></div>`;
+      el.addEventListener('click', () => {
+        const url = `/api/ufc/analyze-and-save?fighterA=${encodeURIComponent(b.homeSlug)}&fighterB=${encodeURIComponent(b.awaySlug)}`;
+        runAnalysisFlow(url, b.homeName, b.awayName);
+      });
+      list.appendChild(el);
+    });
+  } else {
+    const data = await api(`/api/${sport}/fixtures?date=${date}`);
+    if (!data.ok || !data.games.length) { status.textContent = data.ok ? 'No games found for this date.' : `Failed: ${data.reason}`; return; }
+    status.textContent = `${data.games.length} game(s) found.`;
+    data.games.forEach((g) => {
+      const el = document.createElement('div');
+      el.className = 'fixture';
+      el.innerHTML = `<div><div class="comp rj">${sport.toUpperCase()} · ${g.status || ''}</div><div class="teams">${g.homeTeamName} vs ${g.awayTeamName}</div></div>`;
+      el.addEventListener('click', () => {
+        const url = `/api/${sport}/analyze-and-save?home=${encodeURIComponent(g.homeTeamName)}&away=${encodeURIComponent(g.awayTeamName)}`;
+        runAnalysisFlow(url, g.homeTeamName, g.awayTeamName);
+      });
+      list.appendChild(el);
+    });
+  }
 });
 
 document.getElementById('analyze-matchup-btn').addEventListener('click', async () => {
@@ -756,4 +804,4 @@ async function loadTickets() {
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 </script>
 </body>
-  </html>
+</html>
