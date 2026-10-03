@@ -354,10 +354,32 @@ app.get('/api/ticket/:ticketId/settle', async (req, res) => {
     if (!ticket) return res.status(404).json({ ok: false, reason: 'not_found' });
     if (ticket.status !== 'open') return res.json({ ok: true, ticket, alreadySettled: true });
 
+    const footballApiKey = process.env.FOOTBALL_DATA_API_KEY;
     const legResults = [];
     for (const leg of ticket.legs) {
-      const analysis = await getAnalysis(leg.analysisId);
-      if (!analysis || analysis.status !== 'completed') {
+      let analysis = await getAnalysis(leg.analysisId);
+      if (!analysis) return res.json({ ok: false, reason: `analysis_not_found:${leg.analysisId}` });
+
+      // Auto-attempt to replay any still-pending football leg before giving up —
+      // this is the only sport with an automated result lookup so far.
+      if (analysis.status === 'pending' && LEAGUES.includes(analysis.competition) && footballApiKey) {
+        try {
+          const result = await findResult(analysis.competition, analysis.home_team, analysis.away_team, footballApiKey);
+          if (result) {
+            const correct = leanCorrect(analysis.probabilities, result.actualOutcome);
+            const brier = brierScore(analysis.probabilities, result.actualOutcome);
+            const actualScore = { home: result.homeGoals, away: result.awayGoals };
+            const marketResults = Object.entries(analysis.probabilities).map(([market, probability]) => ({
+              market, probability, hit: marketHit(actualScore, market),
+            }));
+            analysis = await updateAnalysisOutcome(analysis.analysis_id, {
+              actualScore, outcomeCorrect: correct, brierScore: brier, marketResults,
+            });
+          }
+        } catch (e) { /* leave as pending if lookup fails, handled below */ }
+      }
+
+      if (analysis.status !== 'completed') {
         return res.json({ ok: false, reason: 'not_all_legs_completed' });
       }
       legResults.push({ ...leg, hit: marketHit(analysis.actual_score, leg.market) });
@@ -531,6 +553,21 @@ app.get('/api/providers/cito/fighter', async (req, res) => {
     });
     const data = await r.json();
     res.json({ ok: r.ok, status: r.status, sample: data });
+  } catch (err) {
+    res.json({ ok: false, reason: err.message });
+  }
+});
+
+app.get('/api/providers/cito/date-test', async (req, res) => {
+  const apiKey = process.env.CITO_API_KEY;
+  if (!apiKey) return res.json({ ok: false, reason: 'no_api_key' });
+  const from = req.query.from || '2026-11-07';
+  const to = req.query.to || '2026-11-07';
+  try {
+    const url = `https://api.citoapi.com/api/v1/ufc/events?limit=5&from=${from}&to=${to}&includeBouts=true`;
+    const r = await fetch(url, { headers: { 'x-api-key': apiKey } });
+    const data = await r.json();
+    res.json({ ok: r.ok, status: r.status, filtersApplied: data.meta?.filters, count: data.data?.length, sample: data });
   } catch (err) {
     res.json({ ok: false, reason: err.message });
   }
